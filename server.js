@@ -1,13 +1,15 @@
+// server.js - Full Ollama Cloud HTTP Streaming Version
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
+const fetch = require('node-fetch'); // make sure node-fetch is installed
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: ["https://your-frontend-app.onrender.com", "http://localhost:3000", "http://localhost:5173"],
+    origin: ["http://localhost:3000", "http://localhost:5173"],
     methods: ["GET", "POST"]
   }
 });
@@ -17,11 +19,12 @@ app.use(express.json());
 
 const clients = new Set();
 
-// Hardcoded API key
+// Hardcoded Ollama Cloud API key
 const OLLAMA_API_KEY = '91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo';
 const OLLAMA_BASE_URL = 'https://api.ollama.ai';
 const MODEL_NAME = 'deepseek-v3.1:671b-cloud';
 
+// Full Tunisian Medical Context
 const MEDICAL_CONTEXT = `
 You are a medical assistant chatbot specifically designed for Tunisian patients. Your role is to:
 
@@ -65,9 +68,10 @@ class MedicalOllamaService {
   async generateResponse(userMessage, socket) {
     try {
       console.log('Medical query from patient:', userMessage);
-      
+
       const medicalPrompt = MEDICAL_CONTEXT + "\n\nPatient: " + userMessage + "\n\nAssistant:";
-      
+
+      // Call Ollama Cloud HTTP API with streaming
       const response = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
         method: 'POST',
         headers: {
@@ -84,7 +88,7 @@ class MedicalOllamaService {
       });
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        throw new Error(`Ollama API error: ${response.status}`);
       }
 
       const reader = response.body.getReader();
@@ -94,10 +98,10 @@ class MedicalOllamaService {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         const chunk = decoder.decode(value);
         const lines = chunk.split('\n').filter(line => line.trim());
-        
+
         for (const line of lines) {
           if (line === 'data: [DONE]') {
             socket.emit('streaming_response', {
@@ -107,30 +111,33 @@ class MedicalOllamaService {
             });
             return fullResponse;
           }
-          
+
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
               if (data.choices?.[0]?.delta?.content) {
                 const content = data.choices[0].delta.content;
                 fullResponse += content;
-                
+
                 socket.emit('streaming_response', {
                   text: fullResponse,
                   partial: true
                 });
               }
             } catch (e) {
-              // Skip parse errors
+              // Skip JSON parse errors for incomplete chunks
             }
           }
         }
       }
-      
+
       return fullResponse;
-      
+
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error generating medical response:', error);
+      if (socket) {
+        socket.emit('error', { message: 'عذرًا، حدث خطأ في النظام. يرجى المحاولة مرة أخرى.' });
+      }
       throw error;
     }
   }
@@ -138,23 +145,25 @@ class MedicalOllamaService {
 
 const medicalService = new MedicalOllamaService();
 
+// Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
+  res.json({
+    status: 'OK',
     message: 'Medical Chatbot Backend is running',
     service: 'Tunisian Patient Assistant',
     timestamp: new Date().toISOString()
   });
 });
 
+// Test Ollama API connectivity
 app.get('/api/test-ollama', async (req, res) => {
   try {
     const testResponse = await fetch(`${OLLAMA_BASE_URL}/v1/models`, {
       headers: { 'Authorization': `Bearer ${OLLAMA_API_KEY}` }
     });
-    
+
     if (testResponse.ok) {
-      res.json({ success: true, message: 'Ollama Cloud API is working' });
+      res.json({ success: true, message: 'Ollama Cloud API is reachable' });
     } else {
       res.json({ success: false, message: 'Ollama API error' });
     }
@@ -163,6 +172,7 @@ app.get('/api/test-ollama', async (req, res) => {
   }
 });
 
+// Socket.io connection
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   clients.add(socket);
@@ -172,9 +182,6 @@ io.on('connection', (socket) => {
       await medicalService.generateResponse(data.message, socket);
     } catch (error) {
       console.error('Error:', error);
-      socket.emit('error', { 
-        message: 'عذرًا، حدث خطأ في النظام. يرجى المحاولة مرة أخرى.' 
-      });
     }
   });
 
@@ -186,8 +193,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🏥 Server running on port ${PORT}`);
+  console.log(`🏥 Medical Chatbot Server running on port ${PORT}`);
   console.log(`🤖 Using Ollama Cloud API with key: ${OLLAMA_API_KEY.substring(0, 10)}...`);
 });
-
-
