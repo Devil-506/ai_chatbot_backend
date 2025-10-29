@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const { spawn } = require('child_process');
 const http = require('http');
 const socketIo = require('socket.io');
 
@@ -8,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:5173"],
+    origin: ["https://your-frontend-app.onrender.com", "http://localhost:3000", "http://localhost:5173"],
     methods: ["GET", "POST"]
   }
 });
@@ -16,10 +15,13 @@ const io = socketIo(server, {
 app.use(cors());
 app.use(express.json());
 
-// Store connected clients
 const clients = new Set();
 
-// Medical context for Tunisian patients
+// Hardcoded API key
+const OLLAMA_API_KEY = '91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo';
+const OLLAMA_BASE_URL = 'https://api.ollama.ai';
+const MODEL_NAME = 'deepseek-v3.1:671b-cloud';
+
 const MEDICAL_CONTEXT = `
 You are a medical assistant chatbot specifically designed for Tunisian patients. Your role is to:
 
@@ -27,6 +29,7 @@ You are a medical assistant chatbot specifically designed for Tunisian patients.
 2. Offer health advice and preventive care information
 3. Help understand medical conditions and treatments
 4. Guide patients to appropriate healthcare resources in Tunisia
+
 IMPORTANT DISCLAIMERS:
 - You are not a replacement for professional medical advice
 - Always consult with healthcare professionals for serious conditions
@@ -38,109 +41,103 @@ Tunisia-specific information:
 - Emergency: 190
 - Common languages: Arabic, French, English
 - Major hospitals: Charles Nicolle, La Rabta, Mongi Slim
-- 
+
 When responding:
-- let space between each word
-- use arabic tunisien dialect
+- Always put proper spaces between words
+- Use Tunisian Arabic dialect
 - Be empathetic and clear
 - Use simple language
-- focus on patient safety
--helpful and supportive
-- keep responses consise
-- maintain confidentiality
-- never ask for personal data
-- never provide prescriptions or specific treatments
-- cater to local healthcare context
+- Focus on patient safety
+- Be helpful and supportive
+- Keep responses concise
+- Maintain confidentiality
+- Never ask for personal data
+- Never provide prescriptions or specific treatments
+- Cater to local healthcare context
 - Consider Tunisian cultural context
 - Suggest local resources when appropriate
 - Always emphasize consulting real doctors
-- Use arabic tunisien dialect for responses
-Now, respond to the patient's query:
+
+Now, respond to the patient's query in natural Tunisian Arabic:
 `;
 
 class MedicalOllamaService {
   async generateResponse(userMessage, socket) {
-    return new Promise((resolve, reject) => {
+    try {
       console.log('Medical query from patient:', userMessage);
       
-      // Enhanced prompt with medical context
       const medicalPrompt = MEDICAL_CONTEXT + "\n\nPatient: " + userMessage + "\n\nAssistant:";
       
-      const ollama = spawn('ollama', ['run', 'deepseek-v3.1:671b-cloud']);
+      const response = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OLLAMA_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: MODEL_NAME,
+          messages: [{ role: "user", content: medicalPrompt }],
+          stream: true,
+          temperature: 0.7,
+          max_tokens: 1000
+        })
+      });
 
-      let response = '';
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
 
-      ollama.stdin.write(medicalPrompt + '\n');
-      ollama.stdin.end();
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullResponse = '';
 
-      let leftover = ''; // store half words between chunks
-
-ollama.stdout.on('data', (data) => {
-  let chunk = data.toString();
-
-  // combine with leftover from previous chunk
-  chunk = leftover + chunk;
-
-  // if chunk ends mid-word, keep last partial word for next round
-  const match = chunk.match(/^(.*\b)(\S*)$/);
-  if (match) {
-    const [_, complete, partial] = match;
-    leftover = partial;
-    chunk = complete;
-  }
-
-  // normalize basic spacing
-  chunk = chunk
-    .replace(/\s+/g, ' ')           // collapse multiple spaces
-    .replace(/ ([.,!?;:])/g, '$1')  // remove space before punctuation
-    .replace(/([.,!?;:])(?!\s)/g, '$1 '); // ensure space after punctuation
-
-  response += chunk;
-
-  if (socket) {
-    socket.emit('streaming_response', {
-      text: response.trim(),
-      partial: true
-    });
-  }
-});
-
-ollama.on('close', (code) => {
-  // flush any leftover partial word
-  if (leftover) response += leftover;
-  if (socket) {
-    socket.emit('streaming_response', {
-      text: response.trim(),
-      partial: false,
-      complete: true
-    });
-  }
-  resolve(response.trim());
-});
-
-      ollama.on('close', (code) => {
-        console.log('Ollama process closed with code:', code);
-        if (socket) {
-          socket.emit('streaming_response', {
-            text: response,
-            partial: false,
-            complete: true
-          });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n').filter(line => line.trim());
+        
+        for (const line of lines) {
+          if (line === 'data: [DONE]') {
+            socket.emit('streaming_response', {
+              text: fullResponse,
+              partial: false,
+              complete: true
+            });
+            return fullResponse;
+          }
+          
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.choices?.[0]?.delta?.content) {
+                const content = data.choices[0].delta.content;
+                fullResponse += content;
+                
+                socket.emit('streaming_response', {
+                  text: fullResponse,
+                  partial: true
+                });
+              }
+            } catch (e) {
+              // Skip parse errors
+            }
+          }
         }
-        resolve(response);
-      });
-
-      ollama.on('error', (error) => {
-        console.error('Ollama process error:', error);
-        reject(error);
-      });
-    });
+      }
+      
+      return fullResponse;
+      
+    } catch (error) {
+      console.error('Error:', error);
+      throw error;
+    }
   }
 }
 
 const medicalService = new MedicalOllamaService();
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -150,17 +147,31 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Socket.io for real-time communication
+app.get('/api/test-ollama', async (req, res) => {
+  try {
+    const testResponse = await fetch(`${OLLAMA_BASE_URL}/v1/models`, {
+      headers: { 'Authorization': `Bearer ${OLLAMA_API_KEY}` }
+    });
+    
+    if (testResponse.ok) {
+      res.json({ success: true, message: 'Ollama Cloud API is working' });
+    } else {
+      res.json({ success: false, message: 'Ollama API error' });
+    }
+  } catch (error) {
+    res.json({ success: false, message: error.message });
+  }
+});
+
 io.on('connection', (socket) => {
-  console.log('Medical chatbot user connected:', socket.id);
+  console.log('User connected:', socket.id);
   clients.add(socket);
 
   socket.on('send_message', async (data) => {
     try {
-      console.log('Received medical query:', data.message);
       await medicalService.generateResponse(data.message, socket);
     } catch (error) {
-      console.error('Error processing medical query:', error);
+      console.error('Error:', error);
       socket.emit('error', { 
         message: 'عذرًا، حدث خطأ في النظام. يرجى المحاولة مرة أخرى.' 
       });
@@ -175,8 +186,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-  console.log(`🏥 Medical Chatbot Server running on port ${PORT}`);
-  console.log(`📍 Health check: http://localhost:${PORT}/api/health`);
-  console.log(`🎯 Service: Tunisian Patient Assistant`);
-  console.log(`🤖 Using model: deepseek-v3.1:671b-cloud`);
+  console.log(`🏥 Server running on port ${PORT}`);
+  console.log(`🤖 Using Ollama Cloud API with key: ${OLLAMA_API_KEY.substring(0, 10)}...`);
 });
