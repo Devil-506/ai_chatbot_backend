@@ -20,7 +20,7 @@ const clients = new Set();
 // Hardcoded API key
 const OLLAMA_API_KEY = '91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo';
 const OLLAMA_BASE_URL = 'https://api.ollama.ai';
-const MODEL_NAME = 'deepseek-v3.1:671b-cloud';
+const MODEL_NAME = 'gpt-oss:20b-cloud';
 
 const MEDICAL_CONTEXT = `
 You are a medical assistant chatbot specifically designed for Tunisian patients. Your role is to:
@@ -189,3 +189,4 @@ server.listen(PORT, () => {
   console.log(`🏥 Server running on port ${PORT}`);
   console.log(`🤖 Using Ollama Cloud API with key: ${OLLAMA_API_KEY.substring(0, 10)}...`);
 });
+
