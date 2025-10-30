@@ -26,6 +26,9 @@ app.use(express.json({ limit: '10mb' }));
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 
+// Simple Admin Configuration
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
+
 // Enhanced Medical Context for Tunisian Patients
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
@@ -197,6 +200,90 @@ const medicalService = new RemoteOllamaService();
 // Store active connections
 const activeConnections = new Map();
 
+// Store chat history for admin monitoring
+const chatHistory = [];
+const MAX_HISTORY_SIZE = 1000;
+
+// Simple Admin Controls
+const adminControls = {
+  getConnectedUsers() {
+    return Array.from(activeConnections.entries()).map(([id, info]) => ({
+      socketId: id,
+      ...info,
+      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's'
+    }));
+  },
+
+  kickUser(socketId) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) {
+      socket.emit('admin_message', {
+        type: 'warning',
+        message: 'تم فصل اتصالك من قبل المسؤول'
+      });
+      socket.disconnect(true);
+      console.log(`🔴 Admin kicked user: ${socketId}`);
+      return true;
+    }
+    return false;
+  },
+
+  blockUser(socketId) {
+    // Simple blocking - just kick and prevent immediate reconnection
+    // In production, you'd want a proper blocking mechanism
+    return this.kickUser(socketId);
+  },
+
+  broadcastToAll(message) {
+    io.emit('admin_announcement', {
+      message: message,
+      timestamp: new Date().toISOString(),
+      from: 'System Admin'
+    });
+    console.log(`📢 Admin broadcast: ${message}`);
+    return activeConnections.size;
+  },
+
+  getServerStats() {
+    return {
+      totalConnections: activeConnections.size,
+      chatHistorySize: chatHistory.length,
+      serverUptime: process.uptime(),
+      memoryUsage: process.memoryUsage(),
+      timestamp: new Date().toISOString()
+    };
+  }
+};
+
+// Function to add message to history
+function addToHistory(socketId, type, content, timestamp = new Date()) {
+  const entry = {
+    id: `${socketId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    socketId,
+    type, // 'user_message', 'bot_response', 'user_connected', 'user_disconnected'
+    content,
+    timestamp: timestamp.toISOString(),
+    timestampReadable: timestamp.toLocaleString('en-US', { 
+      timeZone: 'Africa/Tunis',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  };
+  
+  chatHistory.push(entry);
+  
+  // Keep history size manageable
+  if (chatHistory.length > MAX_HISTORY_SIZE) {
+    chatHistory.splice(0, chatHistory.length - MAX_HISTORY_SIZE);
+  }
+  
+  return entry;
+}
+
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
   try {
@@ -222,6 +309,12 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// Simple admin stats endpoint (no auth for local use)
+app.get('/api/admin/stats', (req, res) => {
+  const stats = adminControls.getServerStats();
+  res.json(stats);
+});
+
 // Simple test endpoint
 app.get('/api/test', (req, res) => {
   res.json({
@@ -235,10 +328,16 @@ app.get('/api/test', (req, res) => {
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
   
-  activeConnections.set(socket.id, {
+  const userInfo = {
     connectedAt: new Date(),
-    ip: socket.handshake.address
-  });
+    ip: socket.handshake.address,
+    userAgent: socket.handshake.headers['user-agent']
+  };
+  
+  activeConnections.set(socket.id, userInfo);
+  
+  // Add to chat history
+  addToHistory(socket.id, 'user_connected', `User connected from ${userInfo.ip}`);
 
   // Send welcome message
   socket.emit('welcome', {
@@ -261,6 +360,10 @@ io.on('connection', (socket) => {
 
     try {
       console.log(`📝 Processing message from ${socket.id}`);
+      
+      // Add user message to history
+      addToHistory(socket.id, 'user_message', data.message.trim());
+      
       await medicalService.generateResponse(data.message.trim(), socket);
     } catch (error) {
       console.error('💥 Message processing error:', error);
@@ -273,6 +376,10 @@ io.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log('🔌 User disconnected:', socket.id, 'Reason:', reason);
+    
+    // Add to chat history
+    addToHistory(socket.id, 'user_disconnected', `User disconnected: ${reason}`);
+    
     activeConnections.delete(socket.id);
   });
 
@@ -280,6 +387,69 @@ io.on('connection', (socket) => {
   socket.on('error', (error) => {
     console.error('💥 Socket error:', error);
   });
+
+  // ==================== SIMPLE REAL-TIME ADMIN ====================
+  
+  // ADMIN SECRET CONNECTION - Simple and effective for local server
+  if (socket.handshake.auth.secret === ADMIN_SECRET) {
+    console.log('🔓 Admin connected via WebSocket:', socket.id);
+    
+    socket.emit('admin_welcome', { 
+      message: '🔓 أنت متصل كمسؤول',
+      users: adminControls.getConnectedUsers(),
+      stats: adminControls.getServerStats()
+    });
+
+    // Send real-time updates to admin
+    socket.on('admin_kick_user', (data) => {
+      const success = adminControls.kickUser(data.socketId);
+      socket.emit('admin_action_result', {
+        action: 'kick_user',
+        success: success,
+        message: success ? `تم فصل المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_block_user', (data) => {
+      const success = adminControls.blockUser(data.socketId);
+      socket.emit('admin_action_result', {
+        action: 'block_user',
+        success: success,
+        message: success ? `تم حظر المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_broadcast', (data) => {
+      const recipients = adminControls.broadcastToAll(data.message);
+      socket.emit('admin_action_result', {
+        action: 'broadcast',
+        success: true,
+        message: `تم إرسال الإشعار إلى ${recipients} مستخدم`
+      });
+    });
+
+    socket.on('admin_get_stats', () => {
+      socket.emit('admin_stats', adminControls.getServerStats());
+    });
+
+    socket.on('admin_get_history', () => {
+      socket.emit('admin_chat_history', chatHistory.slice(-50));
+    });
+
+    // Send user updates to admin in real-time every 3 seconds
+    const adminUpdateInterval = setInterval(() => {
+      socket.emit('admin_users_update', {
+        users: adminControls.getConnectedUsers(),
+        stats: adminControls.getServerStats()
+      });
+    }, 3000);
+
+    // Clear interval when admin disconnects
+    socket.on('disconnect', () => {
+      clearInterval(adminUpdateInterval);
+      console.log('🔒 Admin disconnected:', socket.id);
+    });
+  }
 });
 
 // 404 handler
@@ -308,6 +478,7 @@ server.listen(PORT, '0.0.0.0', () => {
 🎯 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
+🔒 Admin Secret: ${ADMIN_SECRET}
 ✨ Server is running and ready!
   `);
 });
@@ -321,7 +492,3 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
-
-
-
-
