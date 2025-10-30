@@ -26,6 +26,9 @@ app.use(express.json({ limit: '10mb' }));
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 
+// Configuration - Update these with your ngrok URL
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 // Enhanced Medical Context for Tunisian Patients
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
@@ -42,7 +45,10 @@ const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التو
 - رقم الطوارئ: 198
 - مستشفيات رئيسية: شارل نيكول، الرابطة، المنجي سليم
 *عند الرد:*
+- use the same language as the user! 
+- answer with the language the question is questioned!! 
 - استخدم اللهجة المستخدمة عند السؤال
+- استخدم نفس اللغة التي تم السؤال بها
 - استخدم نفس اللغة المستخدمة في السؤال من أجل الجواب 
 - كن واضحًا ومتعاطفًا
 - ركز على سلامة المريض
@@ -51,6 +57,7 @@ const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التو
 - شجع على استشارة الطبيب
 - استخدم لغة بسيطة
 الآن جاوب على سؤال المريض:`;
+
 
 class RemoteOllamaService {
   async generateResponse(userMessage, socket) {
@@ -316,5 +323,6 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
+
 
 
