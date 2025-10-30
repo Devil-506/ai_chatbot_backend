@@ -8,11 +8,12 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "express": "^4.18.2",
     "cors": "^2.8.5",
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
+    "socket.io": "^4.7.5"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  }
+  "keywords": ["medical", "chatbot", "tunisia", "healthcare"],
+  "author": "Your Name",
+  "license": "MIT"
 }
+
