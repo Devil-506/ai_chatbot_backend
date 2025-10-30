@@ -1,16 +1,17 @@
-91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo
-
-// server.js
+// server.js - Node 22 CommonJS, Ollama HTTP API streaming
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
-const { Server } = require('socket.io');
+const socketIo = require('socket.io');
+
+// Dynamic fetch import for Node 22 CommonJS
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
+const io = socketIo(server, {
   cors: {
-    origin: ["http://localhost:3000", "http://localhost:5173", "https://ai-chatbot-frontend-1vx1.onrender.com"],
+    origin: ["http://localhost:3000", "http://localhost:5173"],
     methods: ["GET", "POST"]
   }
 });
@@ -20,38 +21,33 @@ app.use(express.json());
 
 const clients = new Set();
 
-// Ollama Cloud config
+// ===== Ollama HTTP API Config =====
 const OLLAMA_API_KEY = '91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo';
 const OLLAMA_BASE_URL = 'https://api.ollama.ai';
 const MODEL_NAME = 'deepseek-v3.1:671b-cloud';
 
-// Tunisian medical context and prompts
+// ===== Tunisian Medical Context =====
 const MEDICAL_CONTEXT = `
-You are a medical assistant chatbot for Tunisian patients. 
-Your goal is to:
-- Provide general medical info, symptom analysis, and preventive care
-- Use Tunisian Arabic, French, or English depending on patient
-- Suggest local Tunisian resources (hospitals, clinics)
-- Always be empathetic, safe, concise, and culturally aware
-- Never give personal prescriptions
-- Emphasize consulting real doctors for serious conditions
-- Emergency number in Tunisia: 190
+You are a medical assistant chatbot specifically designed for Tunisian patients. Your role:
+- Provide general medical information and symptom analysis
+- Offer health advice and preventive care
+- Guide patients to Tunisian healthcare resources
 
-Old Tunisian medical prompts examples:
-- "عندي صداع مستمر، شنو نعمل؟"
-- "شنو الأدوية المناسبة للبرد والرشح؟"
-- "وين نلقا أقرب مستشفى في تونس؟"
-- "نصائح للوقاية من الإنفلونزا في الشتاء"
+IMPORTANT:
+- Not a replacement for professional advice
+- For emergencies, call 190
+- Never ask personal data or give prescriptions
+
+Respond in **Tunisian Arabic**, empathetic, concise, safe, culturally aware.
 `;
 
 class MedicalOllamaService {
   async generateResponse(userMessage, socket) {
     try {
       console.log('Medical query:', userMessage);
+      const prompt = MEDICAL_CONTEXT + "\n\nPatient: " + userMessage + "\n\nAssistant:";
 
-      const prompt = MEDICAL_CONTEXT + `\n\nPatient: ${userMessage}\n\nAssistant:`;
-
-      const response = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
+      const res = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -66,9 +62,9 @@ class MedicalOllamaService {
         })
       });
 
-      if (!response.ok) throw new Error(`Ollama API error: ${response.status}`);
+      if (!res.ok) throw new Error(`Ollama API error: ${res.status}`);
 
-      const reader = response.body.getReader();
+      const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullResponse = '';
 
@@ -77,7 +73,7 @@ class MedicalOllamaService {
         if (done) break;
 
         const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(l => l.trim());
+        const lines = chunk.split('\n').filter(line => line.trim());
 
         for (const line of lines) {
           if (line === 'data: [DONE]') {
@@ -100,10 +96,10 @@ class MedicalOllamaService {
 
       return fullResponse;
 
-    } catch (error) {
-      console.error('Error:', error);
-      socket.emit('error', { message: 'عذرًا، حدث خطأ. حاول مرة أخرى.' });
-      throw error;
+    } catch (err) {
+      console.error(err);
+      if (socket) socket.emit('error', { message: 'عذرًا، حدث خطأ في النظام.' });
+      throw err;
     }
   }
 }
@@ -112,23 +108,7 @@ const medicalService = new MedicalOllamaService();
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'Medical Chatbot Backend running',
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Test Ollama API
-app.get('/api/test-ollama', async (req, res) => {
-  try {
-    const testResp = await fetch(`${OLLAMA_BASE_URL}/v1/models`, {
-      headers: { 'Authorization': `Bearer ${OLLAMA_API_KEY}` }
-    });
-    res.json({ success: testResp.ok, status: testResp.status });
-  } catch (err) {
-    res.json({ success: false, error: err.message });
-  }
+  res.json({ status: 'OK', service: 'Tunisian Medical Assistant', timestamp: new Date() });
 });
 
 // Socket.io connection
@@ -137,9 +117,7 @@ io.on('connection', (socket) => {
   clients.add(socket);
 
   socket.on('send_message', async (data) => {
-    try {
-      await medicalService.generateResponse(data.message, socket);
-    } catch {}
+    await medicalService.generateResponse(data.message, socket);
   });
 
   socket.on('disconnect', () => {
@@ -149,6 +127,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => {
-  console.log(`🏥 Server running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
