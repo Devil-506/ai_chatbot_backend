@@ -17,7 +17,7 @@ app.use(express.json());
 
 // Configuration
 const OLLAMA_API_KEY = '91311739151c4a2581c519cf6cbdff94.yS_kBNTmJNxu9X3-mpWWUmfo';
-const MODEL_NAME = 'deepseek-v3.1:671b-cloud';
+const MODEL_NAME = 'gpt-oss:120b-cloud';
 const OLLAMA_BASE_URL = 'https://api.ollama.ai';
 
 // Medical Context
