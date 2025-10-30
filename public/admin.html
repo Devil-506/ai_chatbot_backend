@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Medical Chatbot Admin Panel</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: #f5f5f5;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status { 
+            padding: 10px; 
+            margin: 10px 0; 
+            border-radius: 4px; 
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .users-list, .history-list { 
+            max-height: 300px; 
+            overflow-y: auto; 
+            border: 1px solid #ddd; 
+            padding: 10px; 
+            margin: 10px 0;
+        }
+        .user-item, .history-item { 
+            padding: 8px; 
+            border-bottom: 1px solid #eee; 
+        }
+        .user-item:hover { background: #f8f9fa; }
+        button { 
+            padding: 8px 16px; 
+            margin: 5px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer;
+        }
+        .btn-kick { background: #dc3545; color: white; }
+        .btn-broadcast { background: #007bff; color: white; }
+        .btn-refresh { background: #28a745; color: white; }
+        input, textarea { 
+            width: 100%; 
+            padding: 8px; 
+            margin: 5px 0; 
+            border: 1px solid #ddd; 
+            border-radius: 4px;
+        }
+        .stats { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 10px; 
+            margin: 10px 0;
+        }
+        .stat-item { 
+            background: #e9ecef; 
+            padding: 10px; 
+            border-radius: 4px; 
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏥 Medical Chatbot Admin Panel</h1>
+        
+        <!-- Connection Status -->
+        <div id="status" class="status disconnected">
+            🔴 Disconnected
+        </div>
+
+        <!-- Connection Form -->
+        <div id="connectionForm">
+            <h3>Connect as Admin</h3>
+            <input type="text" id="serverUrl" placeholder="Server URL" value="http://localhost:10000">
+            <input type="password" id="adminSecret" placeholder="Admin Secret" value="iamtheserver2024">
+            <button onclick="connectAsAdmin()" class="btn-refresh">🔓 Connect as Admin</button>
+        </div>
+
+        <!-- Admin Controls -->
+        <div id="adminControls" style="display: none;">
+            <h3>Admin Controls</h3>
+            
+            <!-- Server Stats -->
+            <div class="stats" id="serverStats">
+                <div class="stat-item">📊 Loading...</div>
+            </div>
+
+            <!-- Broadcast Message -->
+            <div>
+                <h4>📢 Broadcast Message</h4>
+                <textarea id="broadcastMessage" placeholder="Enter message to broadcast to all users..." rows="3"></textarea>
+                <button onclick="broadcastMessage()" class="btn-broadcast">📤 Broadcast to All Users</button>
+            </div>
+
+            <!-- Connected Users -->
+            <div>
+                <h4>👥 Connected Users (<span id="usersCount">0</span>)</h4>
+                <div class="users-list" id="usersList">
+                    <div>No users connected</div>
+                </div>
+                <button onclick="refreshUsers()" class="btn-refresh">🔄 Refresh Users</button>
+            </div>
+
+            <!-- Recent Chat History -->
+            <div>
+                <h4>💬 Recent Chat History</h4>
+                <div class="history-list" id="chatHistory">
+                    <div>No chat history</div>
+                </div>
+                <button onclick="refreshHistory()" class="btn-refresh">🔄 Refresh History</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Socket.IO Client -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        let socket = null;
+
+        function connectAsAdmin() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const adminSecret = document.getElementById('adminSecret').value;
+
+            // Disconnect existing connection
+            if (socket) {
+                socket.disconnect();
+            }
+
+            // Connect with admin secret
+            socket = io(serverUrl, {
+                auth: {
+                    secret: adminSecret
+                }
+            });
+
+            // Connection events
+            socket.on('connect', () => {
+                updateStatus('🟢 Connected as Admin', 'connected');
+                document.getElementById('adminControls').style.display = 'block';
+                console.log('Connected as admin');
+            });
+
+            socket.on('disconnect', (reason) => {
+                updateStatus('🔴 Disconnected: ' + reason, 'disconnected');
+                document.getElementById('adminControls').style.display = 'none';
+            });
+
+            socket.on('connect_error', (error) => {
+                updateStatus('🔴 Connection Error: ' + error.message, 'disconnected');
+                document.getElementById('adminControls').style.display = 'none';
+            });
+
+            // Admin-specific events
+            socket.on('admin_welcome', (data) => {
+                console.log('Admin welcome:', data);
+                alert('✅ ' + data.message);
+                refreshUsers();
+                refreshStats();
+                refreshHistory();
+            });
+
+            socket.on('admin_users_update', (data) => {
+                updateUsersList(data.users);
+                updateStats(data.stats);
+            });
+
+            socket.on('admin_stats', (stats) => {
+                updateStats(stats);
+            });
+
+            socket.on('admin_chat_history', (history) => {
+                updateChatHistory(history);
+            });
+
+            socket.on('admin_action_result', (result) => {
+                alert('✅ ' + result.message);
+                if (result.action === 'kick_user' || result.action === 'block_user') {
+                    refreshUsers();
+                }
+            });
+        }
+
+        function updateStatus(message, className) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            statusElement.className = `status ${className}`;
+        }
+
+        function updateUsersList(users) {
+            const usersList = document.getElementById('usersList');
+            const usersCount = document.getElementById('usersCount');
+            
+            if (users.length === 0) {
+                usersList.innerHTML = '<div>No users connected</div>';
+                usersCount.textContent = '0';
+                return;
+            }
+
+            usersCount.textContent = users.length;
+            usersList.innerHTML = users.map(user => `
+                <div class="user-item">
+                    <strong>Socket ID:</strong> ${user.socketId}<br>
+                    <strong>IP:</strong> ${user.ip}<br>
+                    <strong>Connected:</strong> ${user.connectionTime}<br>
+                    <strong>User Agent:</strong> ${user.userAgent || 'Unknown'}<br>
+                    <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick User</button>
+                </div>
+            `).join('');
+        }
+
+        function updateStats(stats) {
+            const statsElement = document.getElementById('serverStats');
+            statsElement.innerHTML = `
+                <div class="stat-item">
+                    <strong>👥 Connected Users</strong><br>
+                    ${stats.totalConnections}
+                </div>
+                <div class="stat-item">
+                    <strong>💬 Chat History</strong><br>
+                    ${stats.chatHistorySize} messages
+                </div>
+                <div class="stat-item">
+                    <strong>⏰ Server Uptime</strong><br>
+                    ${Math.floor(stats.serverUptime / 60)}m ${Math.floor(stats.serverUptime % 60)}s
+                </div>
+                <div class="stat-item">
+                    <strong>📅 Last Update</strong><br>
+                    ${new Date(stats.timestamp).toLocaleTimeString()}
+                </div>
+            `;
+        }
+
+        function updateChatHistory(history) {
+            const historyElement = document.getElementById('chatHistory');
+            
+            if (history.length === 0) {
+                historyElement.innerHTML = '<div>No chat history</div>';
+                return;
+            }
+
+            historyElement.innerHTML = history.slice().reverse().map(entry => `
+                <div class="history-item">
+                    <strong>[${entry.timestampReadable}]</strong><br>
+                    <strong>Socket:</strong> ${entry.socketId}<br>
+                    <strong>Type:</strong> ${entry.type}<br>
+                    <strong>Content:</strong> ${entry.content.substring(0, 100)}${entry.content.length > 100 ? '...' : ''}
+                </div>
+            `).join('');
+        }
+
+        // Admin actions
+        function kickUser(socketId) {
+            if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
+                socket.emit('admin_kick_user', { socketId });
+            }
+        }
+
+        function broadcastMessage() {
+            const message = document.getElementById('broadcastMessage').value.trim();
+            if (!message) {
+                alert('Please enter a message to broadcast');
+                return;
+            }
+            
+            if (confirm('Are you sure you want to broadcast this message to all users?')) {
+                socket.emit('admin_broadcast', { message });
+                document.getElementById('broadcastMessage').value = '';
+            }
+        }
+
+        function refreshUsers() {
+            socket.emit('admin_get_stats');
+        }
+
+        function refreshStats() {
+            socket.emit('admin_get_stats');
+        }
+
+        function refreshHistory() {
+            socket.emit('admin_get_history');
+        }
+
+        // Auto-connect if values are present
+        window.onload = function() {
+            const secret = document.getElementById('adminSecret').value;
+            if (secret) {
+                // Auto-connect after a short delay
+                setTimeout(() => {
+                    connectAsAdmin();
+                }, 1000);
+            }
+        };
+    </script>
+</body>
+</html>
