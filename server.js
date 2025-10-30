@@ -30,7 +30,8 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 // Enhanced Medical Context for Tunisian Patients
-const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
+const MEDICAL_CONTEXT = `
+أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
 2. تقديم نصائح صحية ومعلومات وقائية
 3. مساعدة المرضى على فهم الحالات الطبية
@@ -55,10 +56,9 @@ const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التو
 - لا تطلب معلومات شخصية
 - لا تعطي وصفات طبية
 - شجع على استشارة الطبيب
-- استخدم لغة بسيطة
-الآن جاوب على سؤال المريض:`;
-
-
+-use frensh language as default language
+الآن جاوب على سؤال المريض:
+`;
 class RemoteOllamaService {
   async generateResponse(userMessage, socket) {
     return new Promise(async (resolve, reject) => {
@@ -323,6 +323,7 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
+
 
 
 
