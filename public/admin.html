@@ -66,6 +66,13 @@
             border-radius: 4px; 
             text-align: center;
         }
+        .admin-section {
+            border: 2px solid #28a745;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            background: #f8fff9;
+        }
     </style>
 </head>
 <body>
@@ -86,8 +93,8 @@
         </div>
 
         <!-- Admin Controls -->
-        <div id="adminControls" style="display: none;">
-            <h3>Admin Controls</h3>
+        <div id="adminControls" style="display: none;" class="admin-section">
+            <h3>🔧 Admin Controls</h3>
             
             <!-- Server Stats -->
             <div class="stats" id="serverStats">
@@ -118,6 +125,13 @@
                 </div>
                 <button onclick="refreshHistory()" class="btn-refresh">🔄 Refresh History</button>
             </div>
+
+            <!-- Quick Actions -->
+            <div>
+                <h4>⚡ Quick Actions</h4>
+                <button onclick="getStats()" class="btn-refresh">📊 Get Server Stats</button>
+                <button onclick="getHistory()" class="btn-refresh">💬 Get Chat History</button>
+            </div>
         </div>
     </div>
 
@@ -125,6 +139,7 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script>
         let socket = null;
+        let adminUpdateInterval = null;
 
         function connectAsAdmin() {
             const serverUrl = document.getElementById('serverUrl').value;
@@ -133,6 +148,9 @@
             // Disconnect existing connection
             if (socket) {
                 socket.disconnect();
+                if (adminUpdateInterval) {
+                    clearInterval(adminUpdateInterval);
+                }
             }
 
             // Connect with admin secret
@@ -152,6 +170,9 @@
             socket.on('disconnect', (reason) => {
                 updateStatus('🔴 Disconnected: ' + reason, 'disconnected');
                 document.getElementById('adminControls').style.display = 'none';
+                if (adminUpdateInterval) {
+                    clearInterval(adminUpdateInterval);
+                }
             });
 
             socket.on('connect_error', (error) => {
@@ -163,9 +184,8 @@
             socket.on('admin_welcome', (data) => {
                 console.log('Admin welcome:', data);
                 alert('✅ ' + data.message);
-                refreshUsers();
-                refreshStats();
-                refreshHistory();
+                updateUsersList(data.users);
+                updateStats(data.stats);
             });
 
             socket.on('admin_users_update', (data) => {
@@ -182,10 +202,24 @@
             });
 
             socket.on('admin_action_result', (result) => {
-                alert('✅ ' + result.message);
-                if (result.action === 'kick_user' || result.action === 'block_user') {
-                    refreshUsers();
+                console.log('Admin action result:', result);
+                if (result.success) {
+                    alert('✅ ' + result.message);
+                } else {
+                    alert('❌ ' + result.message);
                 }
+                
+                // Refresh data after actions
+                if (result.action === 'kick_user' || result.action === 'block_user') {
+                    setTimeout(() => {
+                        socket.emit('admin_get_stats');
+                    }, 1000);
+                }
+            });
+
+            // Handle admin announcement feedback
+            socket.on('admin_announcement', (data) => {
+                console.log('Announcement sent:', data);
             });
         }
 
@@ -199,7 +233,7 @@
             const usersList = document.getElementById('usersList');
             const usersCount = document.getElementById('usersCount');
             
-            if (users.length === 0) {
+            if (!users || users.length === 0) {
                 usersList.innerHTML = '<div>No users connected</div>';
                 usersCount.textContent = '0';
                 return;
@@ -209,32 +243,38 @@
             usersList.innerHTML = users.map(user => `
                 <div class="user-item">
                     <strong>Socket ID:</strong> ${user.socketId}<br>
-                    <strong>IP:</strong> ${user.ip}<br>
-                    <strong>Connected:</strong> ${user.connectionTime}<br>
+                    <strong>IP:</strong> ${user.ip || 'Unknown'}<br>
+                    <strong>Connected:</strong> ${user.connectionTime || 'Unknown'}<br>
                     <strong>User Agent:</strong> ${user.userAgent || 'Unknown'}<br>
                     <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick User</button>
+                    <button onclick="blockUser('${user.socketId}')" class="btn-kick">⛔ Block User</button>
                 </div>
             `).join('');
         }
 
         function updateStats(stats) {
             const statsElement = document.getElementById('serverStats');
+            if (!stats) {
+                statsElement.innerHTML = '<div class="stat-item">📊 No stats available</div>';
+                return;
+            }
+
             statsElement.innerHTML = `
                 <div class="stat-item">
                     <strong>👥 Connected Users</strong><br>
-                    ${stats.totalConnections}
+                    ${stats.totalConnections || 0}
                 </div>
                 <div class="stat-item">
                     <strong>💬 Chat History</strong><br>
-                    ${stats.chatHistorySize} messages
+                    ${stats.chatHistorySize || 0} messages
                 </div>
                 <div class="stat-item">
                     <strong>⏰ Server Uptime</strong><br>
-                    ${Math.floor(stats.serverUptime / 60)}m ${Math.floor(stats.serverUptime % 60)}s
+                    ${stats.serverUptime ? Math.floor(stats.serverUptime / 60) + 'm ' + Math.floor(stats.serverUptime % 60) + 's' : 'Unknown'}
                 </div>
                 <div class="stat-item">
                     <strong>📅 Last Update</strong><br>
-                    ${new Date(stats.timestamp).toLocaleTimeString()}
+                    ${stats.timestamp ? new Date(stats.timestamp).toLocaleTimeString() : 'Unknown'}
                 </div>
             `;
         }
@@ -242,17 +282,20 @@
         function updateChatHistory(history) {
             const historyElement = document.getElementById('chatHistory');
             
-            if (history.length === 0) {
+            if (!history || history.length === 0) {
                 historyElement.innerHTML = '<div>No chat history</div>';
                 return;
             }
 
-            historyElement.innerHTML = history.slice().reverse().map(entry => `
+            // Show latest first
+            const reversedHistory = history.slice().reverse();
+            
+            historyElement.innerHTML = reversedHistory.map(entry => `
                 <div class="history-item">
-                    <strong>[${entry.timestampReadable}]</strong><br>
+                    <strong>[${entry.timestampReadable || new Date(entry.timestamp).toLocaleString()}]</strong><br>
                     <strong>Socket:</strong> ${entry.socketId}<br>
-                    <strong>Type:</strong> ${entry.type}<br>
-                    <strong>Content:</strong> ${entry.content.substring(0, 100)}${entry.content.length > 100 ? '...' : ''}
+                    <strong>Type:</strong> ${entry.type || 'unknown'}<br>
+                    <strong>Content:</strong> ${entry.content ? entry.content.substring(0, 100) + (entry.content.length > 100 ? '...' : '') : 'No content'}
                 </div>
             `).join('');
         }
@@ -261,6 +304,12 @@
         function kickUser(socketId) {
             if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
                 socket.emit('admin_kick_user', { socketId });
+            }
+        }
+
+        function blockUser(socketId) {
+            if (confirm(`Are you sure you want to block user ${socketId}?`)) {
+                socket.emit('admin_block_user', { socketId });
             }
         }
 
@@ -281,8 +330,12 @@
             socket.emit('admin_get_stats');
         }
 
-        function refreshStats() {
+        function getStats() {
             socket.emit('admin_get_stats');
+        }
+
+        function getHistory() {
+            socket.emit('admin_get_history');
         }
 
         function refreshHistory() {
@@ -296,9 +349,19 @@
                 // Auto-connect after a short delay
                 setTimeout(() => {
                     connectAsAdmin();
-                }, 1000);
+                }, 500);
             }
         };
+
+        // Handle page unload
+        window.addEventListener('beforeunload', function() {
+            if (socket) {
+                socket.disconnect();
+            }
+            if (adminUpdateInterval) {
+                clearInterval(adminUpdateInterval);
+            }
+        });
     </script>
 </body>
 </html>
