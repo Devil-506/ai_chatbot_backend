@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
-const path = require('path');  // Add this line
+const path = require('path');
+const fs = require('fs'); // Add this for file system operations
 
 const app = express();
 const server = http.createServer(app);
@@ -44,7 +45,7 @@ const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التو
 **تحذيرات مهمة:**
 - أنت لست بديلاً عن الطبيب
 - استشر المتخصصين للحالات الخطيرة
--للطوارئ اتصل على 190
+-للطوارئ اتقل على 190
 - تقدم معلومات فقط و تشخيصات
 
 **معلومات عن تونس:**
@@ -288,6 +289,49 @@ function addToHistory(socketId, type, content, timestamp = new Date()) {
   return entry;
 }
 
+// ==================== DEBUG ROUTES ====================
+
+// Debug route to check if static files are working
+app.get('/debug-static', (req, res) => {
+  const publicPath = path.join(__dirname, 'public');
+  let files = [];
+  
+  try {
+    if (fs.existsSync(publicPath)) {
+      files = fs.readdirSync(publicPath);
+    }
+  } catch (error) {
+    console.error('Error reading public directory:', error);
+  }
+  
+  res.json({
+    message: 'Static files debug information',
+    publicPath: publicPath,
+    publicExists: fs.existsSync(publicPath),
+    files: files,
+    adminHtmlExists: fs.existsSync(path.join(publicPath, 'admin.html')),
+    currentDir: __dirname
+  });
+});
+
+// Direct admin route
+app.get('/admin-test', (req, res) => {
+  const adminPath = path.join(__dirname, 'public', 'admin.html');
+  console.log('📁 Attempting to serve admin from:', adminPath);
+  
+  if (fs.existsSync(adminPath)) {
+    res.sendFile(adminPath);
+  } else {
+    res.status(404).json({
+      error: 'Admin file not found',
+      path: adminPath,
+      currentFiles: fs.readdirSync(__dirname)
+    });
+  }
+});
+
+// ==================== MAIN ROUTES ====================
+
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
   try {
@@ -328,9 +372,19 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Serve admin panel as the root route
+// Serve admin panel
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Serve admin panel directly
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Root route - redirect to admin
+app.get('/', (req, res) => {
+  res.redirect('/admin');
 });
 
 // Socket.io connection handling
@@ -461,11 +515,21 @@ io.on('connection', (socket) => {
   }
 });
 
-// 404 handler
+// 404 handler - MUST BE LAST
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
-    message: 'عذرًا، المسار غير موجود.'
+    message: 'عذرًا، المسار غير موجود.',
+    requestedUrl: req.originalUrl,
+    availableRoutes: [
+      '/api/health',
+      '/api/admin/stats', 
+      '/api/test',
+      '/admin',
+      '/admin.html',
+      '/admin-test',
+      '/debug-static'
+    ]
   });
 });
 
@@ -480,6 +544,10 @@ app.use((error, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 
+// Check if public folder and admin.html exist on startup
+const publicPath = path.join(__dirname, 'public');
+const adminHtmlPath = path.join(publicPath, 'admin.html');
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
 🏥 Tunisian Medical Chatbot Server
@@ -488,8 +556,20 @@ server.listen(PORT, '0.0.0.0', () => {
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
 🔒 Admin Secret: ${ADMIN_SECRET}
-📁 Static files: Enabled (public folder)
-🌐 Admin Panel: http://localhost:${PORT}/admin.html
+
+📁 Static Files Status:
+   Public folder: ${fs.existsSync(publicPath) ? '✅ EXISTS' : '❌ MISSING'}
+   admin.html: ${fs.existsSync(adminHtmlPath) ? '✅ EXISTS' : '❌ MISSING'}
+
+🌐 Available Admin URLs:
+   http://localhost:${PORT}/admin
+   http://localhost:${PORT}/admin.html  
+   http://localhost:${PORT}/admin-test
+
+🔧 Debug URLs:
+   http://localhost:${PORT}/debug-static
+   http://localhost:${PORT}/api/health
+
 ✨ Server is running and ready!
   `);
 });
