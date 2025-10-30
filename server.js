@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
+const path = require('path');  // Add this line
 
 const app = express();
 const server = http.createServer(app);
@@ -21,6 +22,9 @@ const io = socketIo(server, {
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+// Serve static files from 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Configuration - Update these with your ngrok URL
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
@@ -324,6 +328,11 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Serve admin panel as the root route
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
@@ -479,6 +488,8 @@ server.listen(PORT, '0.0.0.0', () => {
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
 🔒 Admin Secret: ${ADMIN_SECRET}
+📁 Static files: Enabled (public folder)
+🌐 Admin Panel: http://localhost:${PORT}/admin.html
 ✨ Server is running and ready!
   `);
 });
