@@ -73,6 +73,17 @@
             border-radius: 8px;
             background: #f8fff9;
         }
+        .debug-console {
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 10px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            height: 150px;
+            overflow-y: auto;
+            margin: 10px 0;
+        }
     </style>
 </head>
 <body>
@@ -87,9 +98,27 @@
         <!-- Connection Form -->
         <div id="connectionForm">
             <h3>Connect as Admin</h3>
-            <input type="text" id="serverUrl" placeholder="Server URL" value="https://ai-chatbot-backend-ouvg.onrender.com">
-            <input type="password" id="adminSecret" placeholder="Admin Secret" value="ghayth031957">
+            <input type="text" id="serverUrl" placeholder="Server URL" value="">
+            <input type="password" id="adminSecret" placeholder="Admin Secret" value="iamtheserver2024">
             <button onclick="connectAsAdmin()" class="btn-refresh">🔓 Connect as Admin</button>
+            
+            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                <strong>Auto-detected:</strong> 
+                <span id="environmentInfo">Detecting environment...</span>
+            </div>
+        </div>
+
+        <!-- Debug Console -->
+        <div class="debug-console" id="debugConsole">
+            <div>🔧 Debug Console - Ready</div>
+        </div>
+
+        <!-- Debug Controls -->
+        <div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 4px;">
+            <h4>🔧 Debug Tools</h4>
+            <button onclick="testAdminCommands()" class="btn-refresh">🧪 Test Admin Commands</button>
+            <button onclick="showSocketInfo()" class="btn-refresh">🔌 Show Socket Info</button>
+            <button onclick="clearDebugConsole()" class="btn-refresh">🗑️ Clear Console</button>
         </div>
 
         <!-- Admin Controls -->
@@ -141,6 +170,68 @@
         let socket = null;
         let adminUpdateInterval = null;
 
+        // Debug logging
+        function debugLog(message) {
+            const debugConsole = document.getElementById('debugConsole');
+            const timestamp = new Date().toLocaleTimeString();
+            debugConsole.innerHTML += `[${timestamp}] ${message}<br>`;
+            debugConsole.scrollTop = debugConsole.scrollHeight;
+            console.log(`[ADMIN] ${message}`);
+        }
+
+        function clearDebugConsole() {
+            document.getElementById('debugConsole').innerHTML = '<div>🔧 Debug Console - Cleared</div>';
+        }
+
+        function showSocketInfo() {
+            if (socket) {
+                debugLog(`🔌 Socket ID: ${socket.id}`);
+                debugLog(`🔌 Connected: ${socket.connected}`);
+            } else {
+                debugLog('❌ No socket connection');
+            }
+        }
+
+        function testAdminCommands() {
+            if (!socket || !socket.connected) {
+                debugLog('❌ Socket not connected');
+                return;
+            }
+            
+            debugLog('🧪 Testing admin commands...');
+            
+            // Test get stats
+            socket.emit('admin_get_stats');
+            debugLog('📊 Sent: admin_get_stats');
+            
+            // Test get history
+            socket.emit('admin_get_history');
+            debugLog('💬 Sent: admin_get_history');
+            
+            // Test broadcast
+            socket.emit('admin_broadcast', { message: 'Test message from admin debug' });
+            debugLog('📢 Sent: admin_broadcast');
+        }
+
+        // Auto-detect environment and set server URL
+        function detectEnvironment() {
+            const serverUrlInput = document.getElementById('serverUrl');
+            const environmentInfo = document.getElementById('environmentInfo');
+            
+            if (window.location.hostname.includes('render.com') || 
+                (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+                // Production environment
+                serverUrlInput.value = window.location.origin;
+                environmentInfo.textContent = 'Production (Render)';
+                environmentInfo.style.color = '#28a745';
+            } else {
+                // Local development
+                serverUrlInput.value = 'http://localhost:10000';
+                environmentInfo.textContent = 'Local Development';
+                environmentInfo.style.color = '#007bff';
+            }
+        }
+
         function connectAsAdmin() {
             const serverUrl = document.getElementById('serverUrl').value;
             const adminSecret = document.getElementById('adminSecret').value;
@@ -153,6 +244,8 @@
                 }
             }
 
+            debugLog(`🔗 Connecting to: ${serverUrl}`);
+
             // Connect with admin secret
             socket = io(serverUrl, {
                 auth: {
@@ -162,12 +255,13 @@
 
             // Connection events
             socket.on('connect', () => {
+                debugLog('✅ WebSocket connected');
                 updateStatus('🟢 Connected as Admin', 'connected');
                 document.getElementById('adminControls').style.display = 'block';
-                console.log('Connected as admin');
             });
 
             socket.on('disconnect', (reason) => {
+                debugLog(`❌ WebSocket disconnected: ${reason}`);
                 updateStatus('🔴 Disconnected: ' + reason, 'disconnected');
                 document.getElementById('adminControls').style.display = 'none';
                 if (adminUpdateInterval) {
@@ -176,50 +270,49 @@
             });
 
             socket.on('connect_error', (error) => {
+                debugLog(`❌ Connection Error: ${error.message}`);
                 updateStatus('🔴 Connection Error: ' + error.message, 'disconnected');
                 document.getElementById('adminControls').style.display = 'none';
             });
 
             // Admin-specific events
             socket.on('admin_welcome', (data) => {
-                console.log('Admin welcome:', data);
-                alert('✅ ' + data.message);
+                debugLog(`🔓 Admin welcome: ${data.message}`);
+                debugLog(`👥 Users: ${data.users.length}`);
                 updateUsersList(data.users);
                 updateStats(data.stats);
             });
 
             socket.on('admin_users_update', (data) => {
+                debugLog(`👥 Users update: ${data.users.length} users`);
                 updateUsersList(data.users);
                 updateStats(data.stats);
             });
 
             socket.on('admin_stats', (stats) => {
+                debugLog('📊 Server stats received');
                 updateStats(stats);
             });
 
             socket.on('admin_chat_history', (history) => {
+                debugLog(`💬 Chat history received: ${history.length} items`);
                 updateChatHistory(history);
             });
 
             socket.on('admin_action_result', (result) => {
-                console.log('Admin action result:', result);
+                debugLog(`✅ ${result.action}: ${result.message} (success: ${result.success})`);
                 if (result.success) {
                     alert('✅ ' + result.message);
                 } else {
                     alert('❌ ' + result.message);
                 }
-                
-                // Refresh data after actions
-                if (result.action === 'kick_user' || result.action === 'block_user') {
-                    setTimeout(() => {
-                        socket.emit('admin_get_stats');
-                    }, 1000);
-                }
             });
 
-            // Handle admin announcement feedback
-            socket.on('admin_announcement', (data) => {
-                console.log('Announcement sent:', data);
+            // Listen for all admin events for debugging
+            socket.onAny((eventName, data) => {
+                if (eventName.startsWith('admin_')) {
+                    debugLog(`📨 Received: ${eventName}`);
+                }
             });
         }
 
@@ -304,12 +397,14 @@
         function kickUser(socketId) {
             if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
                 socket.emit('admin_kick_user', { socketId });
+                debugLog(`🚫 Kicking user: ${socketId}`);
             }
         }
 
         function blockUser(socketId) {
             if (confirm(`Are you sure you want to block user ${socketId}?`)) {
                 socket.emit('admin_block_user', { socketId });
+                debugLog(`⛔ Blocking user: ${socketId}`);
             }
         }
 
@@ -323,33 +418,42 @@
             if (confirm('Are you sure you want to broadcast this message to all users?')) {
                 socket.emit('admin_broadcast', { message });
                 document.getElementById('broadcastMessage').value = '';
+                debugLog(`📢 Broadcasting: ${message}`);
             }
         }
 
         function refreshUsers() {
             socket.emit('admin_get_stats');
+            debugLog('🔄 Refreshing users');
         }
 
         function getStats() {
             socket.emit('admin_get_stats');
+            debugLog('📊 Getting server stats');
         }
 
         function getHistory() {
             socket.emit('admin_get_history');
+            debugLog('💬 Getting chat history');
         }
 
         function refreshHistory() {
             socket.emit('admin_get_history');
+            debugLog('🔄 Refreshing history');
         }
 
-        // Auto-connect if values are present
+        // Initialize on load
         window.onload = function() {
+            detectEnvironment();
+            debugLog('🚀 Admin panel loaded');
+            
+            // Auto-connect if secret is present
             const secret = document.getElementById('adminSecret').value;
             if (secret) {
-                // Auto-connect after a short delay
                 setTimeout(() => {
+                    debugLog('🔓 Auto-connecting with saved secret...');
                     connectAsAdmin();
-                }, 500);
+                }, 1000);
             }
         };
 
@@ -365,4 +469,3 @@
     </script>
 </body>
 </html>
-
