@@ -34,7 +34,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 // Admin Configuration
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
 
-// Enhanced Medical Context (your existing context)
+// Enhanced Medical Context
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
 1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
@@ -208,7 +208,7 @@ const activeConnections = new Map();
 const chatHistory = [];
 const MAX_HISTORY_SIZE = 1000;
 
-// Enhanced Admin Controls with Debugging
+// FIXED: Enhanced Admin Controls with REAL effects
 const adminControls = {
   getConnectedUsers() {
     const users = Array.from(activeConnections.entries()).map(([id, info]) => ({
@@ -220,33 +220,65 @@ const adminControls = {
     return users;
   },
 
-  kickUser(socketId) {
+  kickUser(socketId, adminSocket) {
     console.log(`🚫 Admin: Attempting to kick user: ${socketId}`);
-    const socket = io.sockets.sockets.get(socketId);
-    if (socket) {
-      socket.emit('admin_message', {
+    
+    // Get the target socket
+    const targetSocket = io.sockets.sockets.get(socketId);
+    if (targetSocket) {
+      console.log(`🔍 Found target socket: ${socketId}`);
+      
+      // Send warning message to the user
+      targetSocket.emit('admin_message', {
         type: 'warning',
         message: 'تم فصل اتصالك من قبل المسؤول'
       });
-      socket.disconnect(true);
-      console.log(`🔴 Admin: Successfully kicked user: ${socketId}`);
+      
+      // Actually disconnect the user
+      targetSocket.disconnect(true);
+      
+      // Remove from active connections
+      activeConnections.delete(socketId);
+      
+      // Add to chat history
+      addToHistory(socketId, 'admin_action', `User ${socketId} was kicked by admin`);
+      
+      console.log(`🔴 Admin: SUCCESS - Kicked user: ${socketId}`);
       return true;
     }
     console.log(`❌ Admin: User not found: ${socketId}`);
     return false;
   },
 
-  blockUser(socketId) {
-    return this.kickUser(socketId);
+  blockUser(socketId, adminSocket) {
+    return this.kickUser(socketId, adminSocket);
   },
 
-  broadcastToAll(message) {
+  broadcastToAll(message, adminSocket) {
     console.log(`📢 Admin: Broadcasting to ${activeConnections.size} users:`, message);
-    io.emit('admin_announcement', {
+    
+    // Create broadcast data
+    const broadcastData = {
       message: message,
       timestamp: new Date().toISOString(),
       from: 'System Admin'
+    };
+    
+    // Broadcast to ALL connected sockets (both users and admin)
+    io.emit('admin_announcement', broadcastData);
+    
+    // Also send to individual users for redundancy
+    activeConnections.forEach((info, socketId) => {
+      const userSocket = io.sockets.sockets.get(socketId);
+      if (userSocket && userSocket.connected) {
+        userSocket.emit('admin_announcement', broadcastData);
+      }
     });
+    
+    // Add to chat history
+    addToHistory('admin', 'broadcast', `Admin broadcast: ${message}`);
+    
+    console.log(`📢 Admin: SUCCESS - Broadcast sent to ${activeConnections.size} users`);
     return activeConnections.size;
   },
 
@@ -375,7 +407,8 @@ io.on('connection', (socket) => {
   const userInfo = {
     connectedAt: new Date(),
     ip: socket.handshake.address,
-    userAgent: socket.handshake.headers['user-agent']
+    userAgent: socket.handshake.headers['user-agent'],
+    isAdmin: false
   };
   
   activeConnections.set(socket.id, userInfo);
@@ -387,6 +420,18 @@ io.on('connection', (socket) => {
     message: 'أهلاً وسهلاً! أنا مساعدك الطبي التونسي. كيف يمكنني مساعدتك اليوم؟',
     id: socket.id,
     timestamp: new Date().toISOString()
+  });
+
+  // Handle admin announcements for regular users
+  socket.on('admin_announcement', (data) => {
+    console.log(`📢 User ${socket.id} received admin announcement:`, data.message);
+    // This will be handled by the frontend to show the message
+  });
+
+  // Handle admin messages (warnings, kicks)
+  socket.on('admin_message', (data) => {
+    console.log(`⚠️ User ${socket.id} received admin message:`, data.message);
+    // This will be handled by the frontend to show warnings
   });
 
   // Handle incoming messages
@@ -429,20 +474,15 @@ io.on('connection', (socket) => {
     console.error('💥 Socket error:', error);
   });
 
-  // ==================== ENHANCED REAL-TIME ADMIN ====================
+  // ==================== FIXED REAL-TIME ADMIN ====================
   
   if (socket.handshake.auth.secret === ADMIN_SECRET) {
     console.log('🔓 Admin connected via WebSocket:', socket.id);
     console.log('🔓 Admin authentication successful');
     
-    // Log all admin events for debugging
-    const originalOn = socket.on;
-    socket.on = function(eventName, listener) {
-      if (eventName.startsWith('admin_')) {
-        console.log(`🔧 Admin registered listener for: ${eventName}`);
-      }
-      return originalOn.call(this, eventName, listener);
-    };
+    // Mark as admin
+    userInfo.isAdmin = true;
+    activeConnections.set(socket.id, userInfo);
 
     socket.emit('admin_welcome', { 
       message: '🔓 أنت متصل كمسؤول',
@@ -451,10 +491,10 @@ io.on('connection', (socket) => {
       socketId: socket.id
     });
 
-    // Admin event handlers with detailed logging
+    // FIXED: Admin event handlers with REAL effects
     socket.on('admin_kick_user', (data) => {
       console.log(`🔧 Admin kick_user event:`, data);
-      const success = adminControls.kickUser(data.socketId);
+      const success = adminControls.kickUser(data.socketId, socket);
       socket.emit('admin_action_result', {
         action: 'kick_user',
         success: success,
@@ -464,7 +504,7 @@ io.on('connection', (socket) => {
 
     socket.on('admin_block_user', (data) => {
       console.log(`🔧 Admin block_user event:`, data);
-      const success = adminControls.blockUser(data.socketId);
+      const success = adminControls.blockUser(data.socketId, socket);
       socket.emit('admin_action_result', {
         action: 'block_user',
         success: success,
@@ -474,7 +514,7 @@ io.on('connection', (socket) => {
 
     socket.on('admin_broadcast', (data) => {
       console.log(`🔧 Admin broadcast event:`, data);
-      const recipients = adminControls.broadcastToAll(data.message);
+      const recipients = adminControls.broadcastToAll(data.message, socket);
       socket.emit('admin_action_result', {
         action: 'broadcast',
         success: true,
