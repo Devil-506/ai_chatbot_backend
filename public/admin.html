@@ -160,7 +160,7 @@
                 <h4>⚡ Quick Actions</h4>
                 <button onclick="getStats()" class="btn-refresh">📊 Get Server Stats</button>
                 <button onclick="getHistory()" class="btn-refresh">💬 Get Chat History</button>
-                <button onclick="clearChatHistory()" class="btn-refresh">🗑️ Clear Chat History</button>
+                <button onclick="getBlockedList()" class="btn-refresh">🚫 Get Blocked List</button>
             </div>
         </div>
     </div>
@@ -202,16 +202,16 @@
             debugLog('🧪 Testing admin commands...');
             
             // Test get stats
-            socket.emit('get_server_stats');
-            debugLog('📊 Sent: get_server_stats');
+            socket.emit('admin_get_stats');
+            debugLog('📊 Sent: admin_get_stats');
             
             // Test get history
-            socket.emit('get_chat_history');
-            debugLog('💬 Sent: get_chat_history');
+            socket.emit('admin_get_history');
+            debugLog('💬 Sent: admin_get_history');
             
             // Test broadcast
-            socket.emit('broadcast_message', { message: 'Test message from admin debug' });
-            debugLog('📢 Sent: broadcast_message');
+            socket.emit('admin_broadcast', { message: 'Test message from admin debug' });
+            debugLog('📢 Sent: admin_broadcast');
         }
 
         // Auto-detect environment and set server URL
@@ -259,10 +259,6 @@
                 debugLog('✅ WebSocket connected');
                 updateStatus('🟢 Connected as Admin', 'connected');
                 document.getElementById('adminControls').style.display = 'block';
-                
-                // Request initial data
-                socket.emit('get_server_stats');
-                socket.emit('get_chat_history');
             });
 
             socket.on('disconnect', (reason) => {
@@ -280,39 +276,30 @@
                 document.getElementById('adminControls').style.display = 'none';
             });
 
-            // Admin authentication result
-            socket.on('admin_auth_result', (data) => {
-                if (data.success) {
-                    debugLog(`🔓 Admin authenticated: ${data.message}`);
-                    updateStatus('🟢 Connected as Admin', 'connected');
-                    document.getElementById('adminControls').style.display = 'block';
-                } else {
-                    debugLog(`❌ Admin auth failed: ${data.message}`);
-                    updateStatus('🔴 Authentication Failed', 'disconnected');
-                    document.getElementById('adminControls').style.display = 'none';
-                    alert('Admin authentication failed: ' + data.message);
-                }
+            // Admin-specific events - MATCHING YOUR SERVER.JS
+            socket.on('admin_welcome', (data) => {
+                debugLog(`🔓 Admin welcome: ${data.message}`);
+                debugLog(`👥 Users: ${data.users.length}`);
+                updateUsersList(data.users);
+                updateStats(data.stats);
             });
 
-            // Server stats update
-            socket.on('server_stats_update', (stats) => {
+            socket.on('admin_users_update', (data) => {
+                debugLog(`👥 Users update: ${data.users.length} users`);
+                updateUsersList(data.users);
+                updateStats(data.stats);
+            });
+
+            socket.on('admin_stats', (stats) => {
                 debugLog('📊 Server stats received');
                 updateStats(stats);
             });
 
-            // Chat history update
-            socket.on('chat_history_update', (history) => {
+            socket.on('admin_chat_history', (history) => {
                 debugLog(`💬 Chat history received: ${history.length} items`);
                 updateChatHistory(history);
             });
 
-            // Connected users update
-            socket.on('connected_users_update', (users) => {
-                debugLog(`👥 Users update: ${users.length} users`);
-                updateUsersList(users);
-            });
-
-            // Admin action results
             socket.on('admin_action_result', (result) => {
                 debugLog(`✅ ${result.action}: ${result.message} (success: ${result.success})`);
                 if (result.success) {
@@ -322,9 +309,14 @@
                 }
             });
 
+            socket.on('admin_blocked_list', (blockedList) => {
+                debugLog(`🚫 Blocked list received - IPs: ${blockedList.ips.length}, Users: ${blockedList.users.length}`);
+                showBlockedList(blockedList);
+            });
+
             // Listen for all admin events for debugging
             socket.onAny((eventName, data) => {
-                if (eventName.startsWith('admin_') || eventName.includes('stats') || eventName.includes('history')) {
+                if (eventName.startsWith('admin_')) {
                     debugLog(`📨 Received: ${eventName}`);
                 }
             });
@@ -353,8 +345,10 @@
                     <strong>IP:</strong> ${user.ip || 'Unknown'}<br>
                     <strong>Connected:</strong> ${user.connectionTime || 'Unknown'}<br>
                     <strong>User Agent:</strong> ${user.userAgent || 'Unknown'}<br>
+                    <strong>Status:</strong> ${user.isBlocked ? '🚫 BLOCKED' : '✅ Active'}<br>
                     <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick User</button>
                     <button onclick="blockUser('${user.socketId}')" class="btn-kick">⛔ Block User</button>
+                    ${user.isBlocked ? `<button onclick="unblockUser('${user.socketId}')" class="btn-refresh">🔓 Unblock</button>` : ''}
                 </div>
             `).join('');
         }
@@ -369,19 +363,27 @@
             statsElement.innerHTML = `
                 <div class="stat-item">
                     <strong>👥 Connected Users</strong><br>
-                    ${stats.connectedUsers || 0}
+                    ${stats.totalConnections || 0}
                 </div>
                 <div class="stat-item">
-                    <strong>💬 Total Messages</strong><br>
-                    ${stats.totalMessages || 0}
+                    <strong>💬 Chat History</strong><br>
+                    ${stats.chatHistorySize || 0} messages
                 </div>
                 <div class="stat-item">
-                    <strong>📅 Server Start</strong><br>
-                    ${stats.serverStartTime ? new Date(stats.serverStartTime).toLocaleString() : 'Unknown'}
+                    <strong>🚫 Blocked IPs</strong><br>
+                    ${stats.blockedIPs || 0}
                 </div>
                 <div class="stat-item">
-                    <strong>🔄 Last Update</strong><br>
-                    ${stats.lastUpdate ? new Date(stats.lastUpdate).toLocaleTimeString() : 'Unknown'}
+                    <strong>⛔ Blocked Users</strong><br>
+                    ${stats.blockedUsers || 0}
+                </div>
+                <div class="stat-item">
+                    <strong>⏰ Server Uptime</strong><br>
+                    ${stats.serverUptime ? Math.floor(stats.serverUptime / 60) + 'm ' + Math.floor(stats.serverUptime % 60) + 's' : 'Unknown'}
+                </div>
+                <div class="stat-item">
+                    <strong>📅 Last Update</strong><br>
+                    ${stats.timestamp ? new Date(stats.timestamp).toLocaleTimeString() : 'Unknown'}
                 </div>
             `;
         }
@@ -399,26 +401,59 @@
             
             historyElement.innerHTML = reversedHistory.map(entry => `
                 <div class="history-item">
-                    <strong>[${entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'Unknown time'}]</strong><br>
-                    <strong>User:</strong> ${entry.userId || entry.socketId || 'Unknown'}<br>
-                    <strong>Type:</strong> ${entry.type || 'message'}<br>
+                    <strong>[${entry.timestampReadable || new Date(entry.timestamp).toLocaleString()}]</strong><br>
+                    <strong>Socket:</strong> ${entry.socketId}<br>
+                    <strong>Type:</strong> ${entry.type || 'unknown'}<br>
                     <strong>Content:</strong> ${entry.content ? entry.content.substring(0, 100) + (entry.content.length > 100 ? '...' : '') : 'No content'}
                 </div>
             `).join('');
         }
 
-        // Admin actions
+        function showBlockedList(blockedList) {
+            let message = `🚫 Blocked List:\n\n`;
+            
+            if (blockedList.ips && blockedList.ips.length > 0) {
+                message += `Blocked IPs (${blockedList.ips.length}):\n`;
+                blockedList.ips.forEach(ip => {
+                    message += `• ${ip.ip} - ${ip.reason} (${new Date(ip.timestamp).toLocaleString()})\n`;
+                });
+                message += `\n`;
+            } else {
+                message += `No blocked IPs\n\n`;
+            }
+            
+            if (blockedList.users && blockedList.users.length > 0) {
+                message += `Blocked Users (${blockedList.users.length}):\n`;
+                blockedList.users.forEach(user => {
+                    message += `• ${user.socketId} - ${user.reason} (${new Date(user.timestamp).toLocaleString()})\n`;
+                });
+            } else {
+                message += `No blocked users`;
+            }
+            
+            alert(message);
+        }
+
+        // Admin actions - MATCHING YOUR SERVER.JS EVENT NAMES
         function kickUser(socketId) {
             if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
-                socket.emit('kick_user', { socketId });
+                socket.emit('admin_kick_user', { socketId });
                 debugLog(`🚫 Kicking user: ${socketId}`);
             }
         }
 
         function blockUser(socketId) {
-            if (confirm(`Are you sure you want to block user ${socketId}?`)) {
-                socket.emit('block_user', { socketId });
-                debugLog(`⛔ Blocking user: ${socketId}`);
+            const reason = prompt(`Enter reason for blocking user ${socketId}:`, "Violation of terms");
+            if (reason !== null) {
+                socket.emit('admin_block_user', { socketId, reason });
+                debugLog(`⛔ Blocking user: ${socketId} - Reason: ${reason}`);
+            }
+        }
+
+        function unblockUser(target) {
+            if (confirm(`Are you sure you want to unblock ${target}?`)) {
+                socket.emit('admin_unblock', { target });
+                debugLog(`🔓 Unblocking: ${target}`);
             }
         }
 
@@ -430,37 +465,35 @@
             }
             
             if (confirm('Are you sure you want to broadcast this message to all users?')) {
-                socket.emit('broadcast_message', { message });
+                socket.emit('admin_broadcast', { message });
                 document.getElementById('broadcastMessage').value = '';
                 debugLog(`📢 Broadcasting: ${message}`);
             }
         }
 
         function refreshUsers() {
-            socket.emit('get_server_stats');
+            socket.emit('admin_get_stats');
             debugLog('🔄 Refreshing users');
         }
 
         function getStats() {
-            socket.emit('get_server_stats');
+            socket.emit('admin_get_stats');
             debugLog('📊 Getting server stats');
         }
 
         function getHistory() {
-            socket.emit('get_chat_history');
+            socket.emit('admin_get_history');
             debugLog('💬 Getting chat history');
         }
 
         function refreshHistory() {
-            socket.emit('get_chat_history');
+            socket.emit('admin_get_history');
             debugLog('🔄 Refreshing history');
         }
 
-        function clearChatHistory() {
-            if (confirm('Are you sure you want to clear ALL chat history? This cannot be undone.')) {
-                socket.emit('clear_chat_history');
-                debugLog('🗑️ Clearing chat history');
-            }
+        function getBlockedList() {
+            socket.emit('admin_get_blocked');
+            debugLog('🚫 Getting blocked list');
         }
 
         // Initialize on load
