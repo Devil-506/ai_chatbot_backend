@@ -25,18 +25,18 @@
         }
         .connected { background: #d4edda; color: #155724; }
         .disconnected { background: #f8d7da; color: #721c24; }
-        .users-list, .history-list { 
+        .users-list, .history-list, .blocked-list { 
             max-height: 300px; 
             overflow-y: auto; 
             border: 1px solid #ddd; 
             padding: 10px; 
             margin: 10px 0;
         }
-        .user-item, .history-item { 
+        .user-item, .history-item, .blocked-item { 
             padding: 8px; 
             border-bottom: 1px solid #eee; 
         }
-        .user-item:hover { background: #f8f9fa; }
+        .user-item:hover, .blocked-item:hover { background: #f8f9fa; }
         button { 
             padding: 8px 16px; 
             margin: 5px; 
@@ -47,6 +47,7 @@
         .btn-kick { background: #dc3545; color: white; }
         .btn-broadcast { background: #007bff; color: white; }
         .btn-refresh { background: #28a745; color: white; }
+        .btn-unblock { background: #ffc107; color: black; }
         input, textarea { 
             width: 100%; 
             padding: 8px; 
@@ -83,6 +84,13 @@
             height: 150px;
             overflow-y: auto;
             margin: 10px 0;
+        }
+        .manual-block-section {
+            background: #fff3cd;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border: 1px solid #ffeaa7;
         }
     </style>
 </head>
@@ -130,6 +138,18 @@
                 <div class="stat-item">📊 Loading...</div>
             </div>
 
+            <!-- Manual Block Section -->
+            <div class="manual-block-section">
+                <h4>⛔ Manual Block</h4>
+                <input type="text" id="manualBlockTarget" placeholder="Enter Socket ID or IP address to block">
+                <input type="text" id="manualBlockReason" placeholder="Reason for blocking">
+                <button onclick="manualBlock()" class="btn-kick">⛔ Block Target</button>
+                
+                <h4 style="margin-top: 15px;">🔓 Manual Unblock</h4>
+                <input type="text" id="manualUnblockTarget" placeholder="Enter Socket ID or IP address to unblock">
+                <button onclick="manualUnblock()" class="btn-unblock">🔓 Unblock Target</button>
+            </div>
+
             <!-- Broadcast Message -->
             <div>
                 <h4>📢 Broadcast Message</h4>
@@ -144,6 +164,16 @@
                     <div>No users connected</div>
                 </div>
                 <button onclick="refreshUsers()" class="btn-refresh">🔄 Refresh Users</button>
+            </div>
+
+            <!-- Blocked List -->
+            <div>
+                <h4>🚫 Blocked Users & IPs (<span id="blockedCount">0</span>)</h4>
+                <div class="blocked-list" id="blockedList">
+                    <div>No blocked items</div>
+                </div>
+                <button onclick="getBlockedList()" class="btn-refresh">🔄 Refresh Blocked List</button>
+                <button onclick="clearAllBlocks()" class="btn-kick">🗑️ Clear All Blocks</button>
             </div>
 
             <!-- Recent Chat History -->
@@ -170,6 +200,7 @@
     <script>
         let socket = null;
         let adminUpdateInterval = null;
+        let currentBlockedList = { ips: [], users: [] };
 
         // Debug logging
         function debugLog(message) {
@@ -259,6 +290,10 @@
                 debugLog('✅ WebSocket connected');
                 updateStatus('🟢 Connected as Admin', 'connected');
                 document.getElementById('adminControls').style.display = 'block';
+                
+                // Get initial data
+                socket.emit('admin_get_stats');
+                socket.emit('admin_get_blocked');
             });
 
             socket.on('disconnect', (reason) => {
@@ -276,7 +311,7 @@
                 document.getElementById('adminControls').style.display = 'none';
             });
 
-            // Admin-specific events - MATCHING YOUR SERVER.JS
+            // Admin-specific events
             socket.on('admin_welcome', (data) => {
                 debugLog(`🔓 Admin welcome: ${data.message}`);
                 debugLog(`👥 Users: ${data.users.length}`);
@@ -304,6 +339,9 @@
                 debugLog(`✅ ${result.action}: ${result.message} (success: ${result.success})`);
                 if (result.success) {
                     alert('✅ ' + result.message);
+                    // Refresh data after successful action
+                    socket.emit('admin_get_stats');
+                    socket.emit('admin_get_blocked');
                 } else {
                     alert('❌ ' + result.message);
                 }
@@ -311,7 +349,8 @@
 
             socket.on('admin_blocked_list', (blockedList) => {
                 debugLog(`🚫 Blocked list received - IPs: ${blockedList.ips.length}, Users: ${blockedList.users.length}`);
-                showBlockedList(blockedList);
+                currentBlockedList = blockedList;
+                updateBlockedList(blockedList);
             });
 
             // Listen for all admin events for debugging
@@ -344,11 +383,10 @@
                     <strong>Socket ID:</strong> ${user.socketId}<br>
                     <strong>IP:</strong> ${user.ip || 'Unknown'}<br>
                     <strong>Connected:</strong> ${user.connectionTime || 'Unknown'}<br>
-                    <strong>User Agent:</strong> ${user.userAgent || 'Unknown'}<br>
                     <strong>Status:</strong> ${user.isBlocked ? '🚫 BLOCKED' : '✅ Active'}<br>
-                    <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick User</button>
-                    <button onclick="blockUser('${user.socketId}')" class="btn-kick">⛔ Block User</button>
-                    ${user.isBlocked ? `<button onclick="unblockUser('${user.socketId}')" class="btn-refresh">🔓 Unblock</button>` : ''}
+                    <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick</button>
+                    <button onclick="blockUser('${user.socketId}')" class="btn-kick">⛔ Block</button>
+                    ${user.isBlocked ? `<button onclick="unblockTarget('${user.socketId}')" class="btn-unblock">🔓 Unblock</button>` : ''}
                 </div>
             `).join('');
         }
@@ -381,11 +419,50 @@
                     <strong>⏰ Server Uptime</strong><br>
                     ${stats.serverUptime ? Math.floor(stats.serverUptime / 60) + 'm ' + Math.floor(stats.serverUptime % 60) + 's' : 'Unknown'}
                 </div>
-                <div class="stat-item">
-                    <strong>📅 Last Update</strong><br>
-                    ${stats.timestamp ? new Date(stats.timestamp).toLocaleTimeString() : 'Unknown'}
-                </div>
             `;
+        }
+
+        function updateBlockedList(blockedList) {
+            const blockedListElement = document.getElementById('blockedList');
+            const blockedCount = document.getElementById('blockedCount');
+            
+            const totalBlocked = (blockedList.ips ? blockedList.ips.length : 0) + (blockedList.users ? blockedList.users.length : 0);
+            blockedCount.textContent = totalBlocked;
+
+            if (totalBlocked === 0) {
+                blockedListElement.innerHTML = '<div>No blocked items</div>';
+                return;
+            }
+
+            let html = '';
+            
+            if (blockedList.ips && blockedList.ips.length > 0) {
+                html += '<h5>🔒 Blocked IPs:</h5>';
+                html += blockedList.ips.map(ip => `
+                    <div class="blocked-item">
+                        <strong>IP:</strong> ${ip.ip}<br>
+                        <strong>Reason:</strong> ${ip.reason || 'No reason provided'}<br>
+                        <strong>Blocked At:</strong> ${ip.timestamp ? new Date(ip.timestamp).toLocaleString() : 'Unknown'}<br>
+                        <strong>Blocked By:</strong> ${ip.blockedBy || 'Unknown'}<br>
+                        <button onclick="unblockTarget('${ip.ip}')" class="btn-unblock">🔓 Unblock IP</button>
+                    </div>
+                `).join('');
+            }
+            
+            if (blockedList.users && blockedList.users.length > 0) {
+                html += '<h5>🔒 Blocked Users:</h5>';
+                html += blockedList.users.map(user => `
+                    <div class="blocked-item">
+                        <strong>Socket ID:</strong> ${user.socketId}<br>
+                        <strong>Reason:</strong> ${user.reason || 'No reason provided'}<br>
+                        <strong>Blocked At:</strong> ${user.timestamp ? new Date(user.timestamp).toLocaleString() : 'Unknown'}<br>
+                        <strong>Blocked By:</strong> ${user.blockedBy || 'Unknown'}<br>
+                        <button onclick="unblockTarget('${user.socketId}')" class="btn-unblock">🔓 Unblock User</button>
+                    </div>
+                `).join('');
+            }
+
+            blockedListElement.innerHTML = html;
         }
 
         function updateChatHistory(history) {
@@ -409,32 +486,7 @@
             `).join('');
         }
 
-        function showBlockedList(blockedList) {
-            let message = `🚫 Blocked List:\n\n`;
-            
-            if (blockedList.ips && blockedList.ips.length > 0) {
-                message += `Blocked IPs (${blockedList.ips.length}):\n`;
-                blockedList.ips.forEach(ip => {
-                    message += `• ${ip.ip} - ${ip.reason} (${new Date(ip.timestamp).toLocaleString()})\n`;
-                });
-                message += `\n`;
-            } else {
-                message += `No blocked IPs\n\n`;
-            }
-            
-            if (blockedList.users && blockedList.users.length > 0) {
-                message += `Blocked Users (${blockedList.users.length}):\n`;
-                blockedList.users.forEach(user => {
-                    message += `• ${user.socketId} - ${user.reason} (${new Date(user.timestamp).toLocaleString()})\n`;
-                });
-            } else {
-                message += `No blocked users`;
-            }
-            
-            alert(message);
-        }
-
-        // Admin actions - MATCHING YOUR SERVER.JS EVENT NAMES
+        // Admin actions
         function kickUser(socketId) {
             if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
                 socket.emit('admin_kick_user', { socketId });
@@ -450,10 +502,55 @@
             }
         }
 
-        function unblockUser(target) {
+        function manualBlock() {
+            const target = document.getElementById('manualBlockTarget').value.trim();
+            const reason = document.getElementById('manualBlockReason').value.trim() || "Manual block by admin";
+            
+            if (!target) {
+                alert('Please enter a Socket ID or IP address to block');
+                return;
+            }
+            
+            if (confirm(`Are you sure you want to block ${target}?`)) {
+                socket.emit('admin_manual_block', { socketId: target, reason });
+                document.getElementById('manualBlockTarget').value = '';
+                document.getElementById('manualBlockReason').value = '';
+                debugLog(`⛔ Manual block: ${target} - Reason: ${reason}`);
+            }
+        }
+
+        function unblockTarget(target) {
             if (confirm(`Are you sure you want to unblock ${target}?`)) {
                 socket.emit('admin_unblock', { target });
                 debugLog(`🔓 Unblocking: ${target}`);
+            }
+        }
+
+        function manualUnblock() {
+            const target = document.getElementById('manualUnblockTarget').value.trim();
+            if (!target) {
+                alert('Please enter a Socket ID or IP address to unblock');
+                return;
+            }
+            
+            unblockTarget(target);
+            document.getElementById('manualUnblockTarget').value = '';
+        }
+
+        function clearAllBlocks() {
+            if (confirm('Are you sure you want to clear ALL blocks? This will unblock all IPs and users.')) {
+                // Unblock all IPs
+                currentBlockedList.ips.forEach(ip => {
+                    socket.emit('admin_unblock', { target: ip.ip });
+                });
+                
+                // Unblock all users
+                currentBlockedList.users.forEach(user => {
+                    socket.emit('admin_unblock', { target: user.socketId });
+                });
+                
+                debugLog('🗑️ Clearing all blocks');
+                alert('Unblock commands sent for all blocked items');
             }
         }
 
