@@ -34,6 +34,10 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 // Admin Configuration
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
 
+// Store blocked IPs and users persistently
+const blockedIPs = new Set();
+const blockedUsers = new Set();
+
 // Enhanced Medical Context
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
@@ -208,13 +212,14 @@ const activeConnections = new Map();
 const chatHistory = [];
 const MAX_HISTORY_SIZE = 1000;
 
-// FIXED: Enhanced Admin Controls with REAL effects
+// FIXED: Enhanced Admin Controls with PERSISTENT blocking
 const adminControls = {
   getConnectedUsers() {
     const users = Array.from(activeConnections.entries()).map(([id, info]) => ({
       socketId: id,
       ...info,
-      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's'
+      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's',
+      isBlocked: blockedIPs.has(info.ip) || blockedUsers.has(id)
     }));
     console.log('👥 Admin: Current connected users:', users.length);
     return users;
@@ -223,24 +228,32 @@ const adminControls = {
   kickUser(socketId, adminSocket) {
     console.log(`🚫 Admin: Attempting to kick user: ${socketId}`);
     
-    // Get the target socket
     const targetSocket = io.sockets.sockets.get(socketId);
     if (targetSocket) {
       console.log(`🔍 Found target socket: ${socketId}`);
       
-      // Send warning message to the user
-      targetSocket.emit('admin_message', {
-        type: 'warning',
-        message: 'تم فصل اتصالك من قبل المسؤول'
+      // Send chat message to user before disconnecting
+      targetSocket.emit('chat_message', {
+        text: "🚫 تم فصل اتصالك من قبل المسؤول. إذا كنت بحاجة إلى مساعدة، يرجى الاتصال بالدعم.",
+        isUser: false,
+        timestamp: new Date().toISOString(),
+        type: 'admin_action'
       });
       
-      // Actually disconnect the user
-      targetSocket.disconnect(true);
+      // Also send as streaming response for consistency
+      targetSocket.emit('streaming_response', {
+        text: "🚫 تم فصل اتصالك من قبل المسؤول. إذا كنت بحاجة إلى مساعدة، يرجى الاتصال بالدعم.",
+        partial: false,
+        complete: true,
+        type: 'admin_action'
+      });
       
-      // Remove from active connections
-      activeConnections.delete(socketId);
+      // Disconnect the user
+      setTimeout(() => {
+        targetSocket.disconnect(true);
+        activeConnections.delete(socketId);
+      }, 1000);
       
-      // Add to chat history
       addToHistory(socketId, 'admin_action', `User ${socketId} was kicked by admin`);
       
       console.log(`🔴 Admin: SUCCESS - Kicked user: ${socketId}`);
@@ -251,31 +264,85 @@ const adminControls = {
   },
 
   blockUser(socketId, adminSocket) {
-    return this.kickUser(socketId, adminSocket);
+    console.log(`⛔ Admin: Attempting to block user: ${socketId}`);
+    
+    const targetSocket = io.sockets.sockets.get(socketId);
+    if (targetSocket) {
+      const userInfo = activeConnections.get(socketId);
+      if (userInfo) {
+        // Block by IP AND socket ID for double protection
+        blockedIPs.add(userInfo.ip);
+        blockedUsers.add(socketId);
+        
+        console.log(`⛔ Blocked IP: ${userInfo.ip} and user: ${socketId}`);
+        
+        // Send chat message to user
+        targetSocket.emit('chat_message', {
+          text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك إعادة الاتصال.",
+          isUser: false,
+          timestamp: new Date().toISOString(),
+          type: 'admin_action'
+        });
+        
+        targetSocket.emit('streaming_response', {
+          text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك إعادة الاتصال.",
+          partial: false,
+          complete: true,
+          type: 'admin_action'
+        });
+        
+        // Disconnect the user
+        setTimeout(() => {
+          targetSocket.disconnect(true);
+          activeConnections.delete(socketId);
+        }, 1000);
+        
+        addToHistory(socketId, 'admin_action', `User ${socketId} (IP: ${userInfo.ip}) was blocked by admin`);
+        
+        console.log(`⛔ Admin: SUCCESS - Blocked user: ${socketId} (IP: ${userInfo.ip})`);
+        return true;
+      }
+    }
+    console.log(`❌ Admin: User not found for blocking: ${socketId}`);
+    return false;
   },
 
   broadcastToAll(message, adminSocket) {
     console.log(`📢 Admin: Broadcasting to ${activeConnections.size} users:`, message);
     
-    // Create broadcast data
-    const broadcastData = {
-      message: message,
+    // Create admin message in chat format
+    const adminMessage = {
+      text: `📢 إشعار من المسؤول: ${message}`,
+      isUser: false,
       timestamp: new Date().toISOString(),
-      from: 'System Admin'
+      type: 'admin_broadcast',
+      from: 'المسؤول'
     };
     
-    // Broadcast to ALL connected sockets (both users and admin)
-    io.emit('admin_announcement', broadcastData);
-    
-    // Also send to individual users for redundancy
+    // Send to ALL connected users as regular chat messages
     activeConnections.forEach((info, socketId) => {
       const userSocket = io.sockets.sockets.get(socketId);
       if (userSocket && userSocket.connected) {
-        userSocket.emit('admin_announcement', broadcastData);
+        // Send as both chat_message and streaming_response for maximum compatibility
+        userSocket.emit('chat_message', adminMessage);
+        userSocket.emit('streaming_response', {
+          text: adminMessage.text,
+          partial: false,
+          complete: true,
+          type: 'admin_broadcast'
+        });
+        
+        console.log(`📢 Sent admin message to user: ${socketId}`);
       }
     });
     
-    // Add to chat history
+    // Also add to general broadcast for any other listeners
+    io.emit('admin_announcement', {
+      message: message,
+      timestamp: new Date().toISOString(),
+      from: 'System Admin'
+    });
+    
     addToHistory('admin', 'broadcast', `Admin broadcast: ${message}`);
     
     console.log(`📢 Admin: SUCCESS - Broadcast sent to ${activeConnections.size} users`);
@@ -286,12 +353,20 @@ const adminControls = {
     const stats = {
       totalConnections: activeConnections.size,
       chatHistorySize: chatHistory.length,
+      blockedIPs: blockedIPs.size,
+      blockedUsers: blockedUsers.size,
       serverUptime: process.uptime(),
       memoryUsage: process.memoryUsage(),
       timestamp: new Date().toISOString()
     };
     console.log('📊 Admin: Server stats requested');
     return stats;
+  },
+
+  // New: Check if user is blocked
+  isUserBlocked(socket) {
+    const ip = socket.handshake.address;
+    return blockedIPs.has(ip) || blockedUsers.has(socket.id);
   }
 };
 
@@ -358,6 +433,10 @@ app.get('/api/health', async (req, res) => {
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       connections: activeConnections.size,
+      blocked: {
+        ips: blockedIPs.size,
+        users: blockedUsers.size
+      },
       ollama: ollamaHealth
     };
     
@@ -369,6 +448,36 @@ app.get('/api/health', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Admin endpoints for quick actions
+app.get('/api/admin/blocked-list', (req, res) => {
+  res.json({
+    blockedIPs: Array.from(blockedIPs),
+    blockedUsers: Array.from(blockedUsers),
+    totalBlocked: blockedIPs.size + blockedUsers.size
+  });
+});
+
+app.post('/api/admin/unblock', (req, res) => {
+  const { ip, socketId } = req.body;
+  
+  if (ip) {
+    blockedIPs.delete(ip);
+    console.log(`🔓 Unblocked IP: ${ip}`);
+  }
+  
+  if (socketId) {
+    blockedUsers.delete(socketId);
+    console.log(`🔓 Unblocked user: ${socketId}`);
+  }
+  
+  res.json({
+    success: true,
+    message: 'Unblocked successfully',
+    blockedIPs: Array.from(blockedIPs),
+    blockedUsers: Array.from(blockedUsers)
+  });
 });
 
 // Simple admin stats endpoint
@@ -404,6 +513,26 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
   
+  // CHECK IF USER IS BLOCKED BEFORE ALLOWING CONNECTION
+  if (adminControls.isUserBlocked(socket)) {
+    console.log(`⛔ Blocked user attempted to connect: ${socket.id}`);
+    
+    // Send block message
+    socket.emit('chat_message', {
+      text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك استخدام الخدمة.",
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      type: 'blocked'
+    });
+    
+    // Disconnect immediately
+    setTimeout(() => {
+      socket.disconnect(true);
+    }, 2000);
+    
+    return; // Stop further processing
+  }
+  
   const userInfo = {
     connectedAt: new Date(),
     ip: socket.handshake.address,
@@ -422,16 +551,29 @@ io.on('connection', (socket) => {
     timestamp: new Date().toISOString()
   });
 
-  // Handle admin announcements for regular users
+  // Handle admin announcements as chat messages
   socket.on('admin_announcement', (data) => {
     console.log(`📢 User ${socket.id} received admin announcement:`, data.message);
-    // This will be handled by the frontend to show the message
+    
+    // Convert to chat message format
+    socket.emit('chat_message', {
+      text: `📢 إشعار من المسؤول: ${data.message}`,
+      isUser: false,
+      timestamp: data.timestamp,
+      type: 'admin_broadcast'
+    });
   });
 
   // Handle admin messages (warnings, kicks)
   socket.on('admin_message', (data) => {
     console.log(`⚠️ User ${socket.id} received admin message:`, data.message);
-    // This will be handled by the frontend to show warnings
+    
+    socket.emit('chat_message', {
+      text: `⚠️ ${data.message}`,
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      type: 'admin_action'
+    });
   });
 
   // Handle incoming messages
@@ -488,10 +630,14 @@ io.on('connection', (socket) => {
       message: '🔓 أنت متصل كمسؤول',
       users: adminControls.getConnectedUsers(),
       stats: adminControls.getServerStats(),
-      socketId: socket.id
+      socketId: socket.id,
+      blockedCount: {
+        ips: blockedIPs.size,
+        users: blockedUsers.size
+      }
     });
 
-    // FIXED: Admin event handlers with REAL effects
+    // FIXED: Admin event handlers with PERSISTENT effects
     socket.on('admin_kick_user', (data) => {
       console.log(`🔧 Admin kick_user event:`, data);
       const success = adminControls.kickUser(data.socketId, socket);
@@ -532,11 +678,35 @@ io.on('connection', (socket) => {
       socket.emit('admin_chat_history', chatHistory.slice(-50));
     });
 
+    // New: Get blocked list
+    socket.on('admin_get_blocked', () => {
+      socket.emit('admin_blocked_list', {
+        blockedIPs: Array.from(blockedIPs),
+        blockedUsers: Array.from(blockedUsers)
+      });
+    });
+
+    // New: Unblock user/IP
+    socket.on('admin_unblock', (data) => {
+      if (data.ip) blockedIPs.delete(data.ip);
+      if (data.socketId) blockedUsers.delete(data.socketId);
+      
+      socket.emit('admin_action_result', {
+        action: 'unblock',
+        success: true,
+        message: `تم إلغاء الحظر`
+      });
+    });
+
     // Send user updates to admin in real-time every 3 seconds
     const adminUpdateInterval = setInterval(() => {
       socket.emit('admin_users_update', {
         users: adminControls.getConnectedUsers(),
-        stats: adminControls.getServerStats()
+        stats: adminControls.getServerStats(),
+        blockedCount: {
+          ips: blockedIPs.size,
+          users: blockedUsers.size
+        }
       });
     }, 3000);
 
