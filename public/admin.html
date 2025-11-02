@@ -45,9 +45,10 @@
             cursor: pointer;
         }
         .btn-kick { background: #dc3545; color: white; }
+        .btn-block { background: #ffc107; color: black; }
+        .btn-unblock { background: #17a2b8; color: white; }
         .btn-broadcast { background: #007bff; color: white; }
         .btn-refresh { background: #28a745; color: white; }
-        .btn-unblock { background: #ffc107; color: black; }
         input, textarea { 
             width: 100%; 
             padding: 8px; 
@@ -67,36 +68,44 @@
             border-radius: 4px; 
             text-align: center;
         }
-        .admin-section {
-            border: 2px solid #28a745;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            background: #f8fff9;
+        .tab-container {
+            margin: 20px 0;
         }
-        .debug-console {
-            background: #1a1a1a;
-            color: #00ff00;
-            padding: 10px;
-            border-radius: 4px;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            height: 150px;
-            overflow-y: auto;
-            margin: 10px 0;
+        .tab-buttons {
+            display: flex;
+            border-bottom: 1px solid #ddd;
         }
-        .manual-block-section {
+        .tab-button {
+            padding: 10px 20px;
+            background: #f8f9fa;
+            border: none;
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+        }
+        .tab-button.active {
+            background: white;
+            border-bottom: 2px solid #007bff;
+            font-weight: bold;
+        }
+        .tab-content {
+            display: none;
+            padding: 20px 0;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .security-alert {
             background: #fff3cd;
+            border: 1px solid #ffeaa7;
             padding: 10px;
             border-radius: 4px;
             margin: 10px 0;
-            border: 1px solid #ffeaa7;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🏥 Medical Chatbot Admin Panel</h1>
+        <h1>🏥 Medical Chatbot Admin Panel - Enhanced Security</h1>
         
         <!-- Connection Status -->
         <div id="status" class="status disconnected">
@@ -106,91 +115,123 @@
         <!-- Connection Form -->
         <div id="connectionForm">
             <h3>Connect as Admin</h3>
-            <input type="text" id="serverUrl" placeholder="Server URL" value="https://ai-chatbot-backend-ouvg.onrender.com">
-            <input type="password" id="adminSecret" placeholder="Admin Secret" value="iamtheserver2024">
+            <input type="text" id="serverUrl" placeholder="Server URL" value="http://localhost:10000">
+            <input type="password" id="adminSecret" placeholder="Admin Secret" value="render-enhanced-secret-2024">
             <button onclick="connectAsAdmin()" class="btn-refresh">🔓 Connect as Admin</button>
-            
-            <div style="margin-top: 10px; font-size: 12px; color: #666;">
-                <strong>Auto-detected:</strong> 
-                <span id="environmentInfo">Detecting environment...</span>
-            </div>
-        </div>
-
-        <!-- Debug Console -->
-        <div class="debug-console" id="debugConsole">
-            <div>🔧 Debug Console - Ready</div>
-        </div>
-
-        <!-- Debug Controls -->
-        <div style="background: #f8f9fa; padding: 10px; margin: 10px 0; border-radius: 4px;">
-            <h4>🔧 Debug Tools</h4>
-            <button onclick="testAdminCommands()" class="btn-refresh">🧪 Test Admin Commands</button>
-            <button onclick="showSocketInfo()" class="btn-refresh">🔌 Show Socket Info</button>
-            <button onclick="clearDebugConsole()" class="btn-refresh">🗑️ Clear Console</button>
         </div>
 
         <!-- Admin Controls -->
-        <div id="adminControls" style="display: none;" class="admin-section">
-            <h3>🔧 Admin Controls</h3>
-            
-            <!-- Server Stats -->
-            <div class="stats" id="serverStats">
-                <div class="stat-item">📊 Loading...</div>
-            </div>
-
-            <!-- Manual Block Section -->
-            <div class="manual-block-section">
-                <h4>⛔ Manual Block</h4>
-                <input type="text" id="manualBlockTarget" placeholder="Enter Socket ID or IP address to block">
-                <input type="text" id="manualBlockReason" placeholder="Reason for blocking">
-                <button onclick="manualBlock()" class="btn-kick">⛔ Block Target</button>
-                
-                <h4 style="margin-top: 15px;">🔓 Manual Unblock</h4>
-                <input type="text" id="manualUnblockTarget" placeholder="Enter Socket ID or IP address to unblock">
-                <button onclick="manualUnblock()" class="btn-unblock">🔓 Unblock Target</button>
-            </div>
-
-            <!-- Broadcast Message -->
-            <div>
-                <h4>📢 Broadcast Message</h4>
-                <textarea id="broadcastMessage" placeholder="Enter message to broadcast to all users..." rows="3"></textarea>
-                <button onclick="broadcastMessage()" class="btn-broadcast">📤 Broadcast to All Users</button>
-            </div>
-
-            <!-- Connected Users -->
-            <div>
-                <h4>👥 Connected Users (<span id="usersCount">0</span>)</h4>
-                <div class="users-list" id="usersList">
-                    <div>No users connected</div>
+        <div id="adminControls" style="display: none;">
+            <!-- Tab Navigation -->
+            <div class="tab-container">
+                <div class="tab-buttons">
+                    <button class="tab-button active" onclick="showTab('dashboard')">📊 Dashboard</button>
+                    <button class="tab-button" onclick="showTab('users')">👥 Users</button>
+                    <button class="tab-button" onclick="showTab('blocked')">⛔ Blocked</button>
+                    <button class="tab-button" onclick="showTab('history')">💬 History</button>
+                    <button class="tab-button" onclick="showTab('security')">🔒 Security</button>
                 </div>
-                <button onclick="refreshUsers()" class="btn-refresh">🔄 Refresh Users</button>
-            </div>
 
-            <!-- Blocked List -->
-            <div>
-                <h4>🚫 Blocked Users & IPs (<span id="blockedCount">0</span>)</h4>
-                <div class="blocked-list" id="blockedList">
-                    <div>No blocked items</div>
+                <!-- Dashboard Tab -->
+                <div id="dashboard" class="tab-content active">
+                    <h3>Server Dashboard</h3>
+                    
+                    <!-- Server Stats -->
+                    <div class="stats" id="serverStats">
+                        <div class="stat-item">📊 Loading...</div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div>
+                        <h4>🚀 Quick Actions</h4>
+                        <button onclick="refreshAll()" class="btn-refresh">🔄 Refresh All Data</button>
+                        <button onclick="getBlockedList()" class="btn-refresh">📋 Refresh Blocked List</button>
+                    </div>
+
+                    <!-- Broadcast Message -->
+                    <div>
+                        <h4>📢 Broadcast Message</h4>
+                        <textarea id="broadcastMessage" placeholder="Enter message to broadcast to all users..." rows="3"></textarea>
+                        <button onclick="broadcastMessage()" class="btn-broadcast">📤 Broadcast to All Users</button>
+                    </div>
                 </div>
-                <button onclick="getBlockedList()" class="btn-refresh">🔄 Refresh Blocked List</button>
-                <button onclick="clearAllBlocks()" class="btn-kick">🗑️ Clear All Blocks</button>
-            </div>
 
-            <!-- Recent Chat History -->
-            <div>
-                <h4>💬 Recent Chat History</h4>
-                <div class="history-list" id="chatHistory">
-                    <div>No chat history</div>
+                <!-- Users Tab -->
+                <div id="users" class="tab-content">
+                    <h3>Connected Users (<span id="usersCount">0</span>)</h3>
+                    <div class="users-list" id="usersList">
+                        <div>No users connected</div>
+                    </div>
+                    <button onclick="refreshUsers()" class="btn-refresh">🔄 Refresh Users</button>
                 </div>
-                <button onclick="refreshHistory()" class="btn-refresh">🔄 Refresh History</button>
-            </div>
 
-            <!-- Quick Actions -->
-            <div>
-                <h4>⚡ Quick Actions</h4>
-                <button onclick="getStats()" class="btn-refresh">📊 Get Server Stats</button>
-                <button onclick="getHistory()" class="btn-refresh">💬 Get Chat History</button>
-                <button onclick="getBlockedList()" class="btn-refresh">🚫 Get Blocked List</button>
+                <!-- Blocked Tab -->
+                <div id="blocked" class="tab-content">
+                    <h3>Blocked Users & IPs</h3>
+                    
+                    <!-- Manual Block -->
+                    <div style="margin-bottom: 20px;">
+                        <h4>🔧 Manual Block</h4>
+                        <input type="text" id="manualBlockTarget" placeholder="Enter Socket ID or IP to block">
+                        <input type="text" id="manualBlockReason" placeholder="Reason for blocking">
+                        <button onclick="manualBlock()" class="btn-block">⛔ Block Target</button>
+                    </div>
+
+                    <!-- Blocked Lists -->
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                        <div>
+                            <h4>🔐 Blocked IPs (<span id="blockedIPsCount">0</span>)</h4>
+                            <div class="blocked-list" id="blockedIPsList">
+                                <div>No blocked IPs</div>
+                            </div>
+                        </div>
+                        <div>
+                            <h4>🚫 Blocked Users (<span id="blockedUsersCount">0</span>)</h4>
+                            <div class="blocked-list" id="blockedUsersList">
+                                <div>No blocked users</div>
+                            </div>
+                        </div>
+                    </div>
+                    <button onclick="getBlockedList()" class="btn-refresh">🔄 Refresh Blocked List</button>
+                </div>
+
+                <!-- History Tab -->
+                <div id="history" class="tab-content">
+                    <h3>Chat History & Security Logs</h3>
+                    <div class="history-list" id="chatHistory">
+                        <div>No chat history</div>
+                    </div>
+                    <button onclick="refreshHistory()" class="btn-refresh">🔄 Refresh History</button>
+                </div>
+
+                <!-- Security Tab -->
+                <div id="security" class="tab-content">
+                    <h3>Security Monitoring</h3>
+                    
+                    <div class="security-alert">
+                        <strong>🔒 Enhanced Security Features Active</strong>
+                        <ul>
+                            <li>✅ Rate Limiting</li>
+                            <li>✅ Input Validation</li>
+                            <li>✅ HTML Sanitization</li>
+                            <li>✅ NoSQL Injection Protection</li>
+                            <li>✅ Enhanced CORS</li>
+                        </ul>
+                    </div>
+
+                    <!-- Security Stats -->
+                    <div class="stats" id="securityStats">
+                        <div class="stat-item">🛡️ Loading security stats...</div>
+                    </div>
+
+                    <!-- Rate Limit Monitoring -->
+                    <div>
+                        <h4>📈 Rate Limit Monitoring</h4>
+                        <div id="rateLimitInfo">
+                            Loading rate limit information...
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -199,70 +240,7 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script>
         let socket = null;
-        let adminUpdateInterval = null;
-        let currentBlockedList = { ips: [], users: [] };
-
-        // Debug logging
-        function debugLog(message) {
-            const debugConsole = document.getElementById('debugConsole');
-            const timestamp = new Date().toLocaleTimeString();
-            debugConsole.innerHTML += `[${timestamp}] ${message}<br>`;
-            debugConsole.scrollTop = debugConsole.scrollHeight;
-            console.log(`[ADMIN] ${message}`);
-        }
-
-        function clearDebugConsole() {
-            document.getElementById('debugConsole').innerHTML = '<div>🔧 Debug Console - Cleared</div>';
-        }
-
-        function showSocketInfo() {
-            if (socket) {
-                debugLog(`🔌 Socket ID: ${socket.id}`);
-                debugLog(`🔌 Connected: ${socket.connected}`);
-            } else {
-                debugLog('❌ No socket connection');
-            }
-        }
-
-        function testAdminCommands() {
-            if (!socket || !socket.connected) {
-                debugLog('❌ Socket not connected');
-                return;
-            }
-            
-            debugLog('🧪 Testing admin commands...');
-            
-            // Test get stats
-            socket.emit('admin_get_stats');
-            debugLog('📊 Sent: admin_get_stats');
-            
-            // Test get history
-            socket.emit('admin_get_history');
-            debugLog('💬 Sent: admin_get_history');
-            
-            // Test broadcast
-            socket.emit('admin_broadcast', { message: 'Test message from admin debug' });
-            debugLog('📢 Sent: admin_broadcast');
-        }
-
-        // Auto-detect environment and set server URL
-        function detectEnvironment() {
-            const serverUrlInput = document.getElementById('serverUrl');
-            const environmentInfo = document.getElementById('environmentInfo');
-            
-            if (window.location.hostname.includes('render.com') || 
-                (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
-                // Production environment
-                serverUrlInput.value = window.location.origin;
-                environmentInfo.textContent = 'Production (Render)';
-                environmentInfo.style.color = '#28a745';
-            } else {
-                // Local development
-                serverUrlInput.value = 'http://localhost:10000';
-                environmentInfo.textContent = 'Local Development';
-                environmentInfo.style.color = '#007bff';
-            }
-        }
+        let currentStats = {};
 
         function connectAsAdmin() {
             const serverUrl = document.getElementById('serverUrl').value;
@@ -271,92 +249,65 @@
             // Disconnect existing connection
             if (socket) {
                 socket.disconnect();
-                if (adminUpdateInterval) {
-                    clearInterval(adminUpdateInterval);
-                }
             }
-
-            debugLog(`🔗 Connecting to: ${serverUrl}`);
 
             // Connect with admin secret
             socket = io(serverUrl, {
                 auth: {
                     secret: adminSecret
-                }
+                },
+                transports: ['websocket', 'polling']
             });
 
             // Connection events
             socket.on('connect', () => {
-                debugLog('✅ WebSocket connected');
-                updateStatus('🟢 Connected as Admin', 'connected');
+                updateStatus('🟢 Connected as Admin - Enhanced Security', 'connected');
                 document.getElementById('adminControls').style.display = 'block';
-                
-                // Get initial data
-                socket.emit('admin_get_stats');
-                socket.emit('admin_get_blocked');
+                console.log('Connected as admin with enhanced security');
             });
 
             socket.on('disconnect', (reason) => {
-                debugLog(`❌ WebSocket disconnected: ${reason}`);
                 updateStatus('🔴 Disconnected: ' + reason, 'disconnected');
                 document.getElementById('adminControls').style.display = 'none';
-                if (adminUpdateInterval) {
-                    clearInterval(adminUpdateInterval);
-                }
             });
 
             socket.on('connect_error', (error) => {
-                debugLog(`❌ Connection Error: ${error.message}`);
                 updateStatus('🔴 Connection Error: ' + error.message, 'disconnected');
                 document.getElementById('adminControls').style.display = 'none';
+                alert('Connection failed: ' + error.message);
             });
 
             // Admin-specific events
             socket.on('admin_welcome', (data) => {
-                debugLog(`🔓 Admin welcome: ${data.message}`);
-                debugLog(`👥 Users: ${data.users.length}`);
-                updateUsersList(data.users);
-                updateStats(data.stats);
+                console.log('Admin welcome:', data);
+                showNotification('✅ ' + data.message);
+                refreshAll();
             });
 
             socket.on('admin_users_update', (data) => {
-                debugLog(`👥 Users update: ${data.users.length} users`);
                 updateUsersList(data.users);
                 updateStats(data.stats);
+                updateSecurityStats(data.security);
             });
 
             socket.on('admin_stats', (stats) => {
-                debugLog('📊 Server stats received');
                 updateStats(stats);
+                currentStats = stats;
             });
 
             socket.on('admin_chat_history', (history) => {
-                debugLog(`💬 Chat history received: ${history.length} items`);
                 updateChatHistory(history);
             });
 
-            socket.on('admin_action_result', (result) => {
-                debugLog(`✅ ${result.action}: ${result.message} (success: ${result.success})`);
-                if (result.success) {
-                    alert('✅ ' + result.message);
-                    // Refresh data after successful action
-                    socket.emit('admin_get_stats');
-                    socket.emit('admin_get_blocked');
-                } else {
-                    alert('❌ ' + result.message);
-                }
-            });
-
             socket.on('admin_blocked_list', (blockedList) => {
-                debugLog(`🚫 Blocked list received - IPs: ${blockedList.ips.length}, Users: ${blockedList.users.length}`);
-                currentBlockedList = blockedList;
-                updateBlockedList(blockedList);
+                updateBlockedLists(blockedList);
             });
 
-            // Listen for all admin events for debugging
-            socket.onAny((eventName, data) => {
-                if (eventName.startsWith('admin_')) {
-                    debugLog(`📨 Received: ${eventName}`);
+            socket.on('admin_action_result', (result) => {
+                showNotification('✅ ' + result.message);
+                if (result.action === 'kick_user' || result.action === 'block_user' || result.action === 'unblock') {
+                    refreshUsers();
+                    getBlockedList();
                 }
             });
         }
@@ -371,7 +322,7 @@
             const usersList = document.getElementById('usersList');
             const usersCount = document.getElementById('usersCount');
             
-            if (!users || users.length === 0) {
+            if (users.length === 0) {
                 usersList.innerHTML = '<div>No users connected</div>';
                 usersCount.textContent = '0';
                 return;
@@ -381,133 +332,167 @@
             usersList.innerHTML = users.map(user => `
                 <div class="user-item">
                     <strong>Socket ID:</strong> ${user.socketId}<br>
-                    <strong>IP:</strong> ${user.ip || 'Unknown'}<br>
-                    <strong>Connected:</strong> ${user.connectionTime || 'Unknown'}<br>
-                    <strong>Status:</strong> ${user.isBlocked ? '🚫 BLOCKED' : '✅ Active'}<br>
+                    <strong>IP:</strong> ${user.ip}<br>
+                    <strong>Connected:</strong> ${user.connectionTime}<br>
+                    <strong>Messages:</strong> ${user.messageCount || 0}<br>
+                    <strong>Status:</strong> ${user.isBlocked ? '⛔ BLOCKED' : '✅ Active'}<br>
                     <button onclick="kickUser('${user.socketId}')" class="btn-kick">🚫 Kick</button>
-                    <button onclick="blockUser('${user.socketId}')" class="btn-kick">⛔ Block</button>
-                    ${user.isBlocked ? `<button onclick="unblockTarget('${user.socketId}')" class="btn-unblock">🔓 Unblock</button>` : ''}
+                    <button onclick="blockUser('${user.socketId}')" class="btn-block">⛔ Block</button>
                 </div>
             `).join('');
         }
 
         function updateStats(stats) {
             const statsElement = document.getElementById('serverStats');
-            if (!stats) {
-                statsElement.innerHTML = '<div class="stat-item">📊 No stats available</div>';
-                return;
-            }
-
             statsElement.innerHTML = `
                 <div class="stat-item">
                     <strong>👥 Connected Users</strong><br>
-                    ${stats.totalConnections || 0}
+                    ${stats.totalConnections}
                 </div>
                 <div class="stat-item">
                     <strong>💬 Chat History</strong><br>
-                    ${stats.chatHistorySize || 0} messages
+                    ${stats.chatHistorySize} messages
                 </div>
                 <div class="stat-item">
-                    <strong>🚫 Blocked IPs</strong><br>
-                    ${stats.blockedIPs || 0}
+                    <strong>⛔ Blocked IPs</strong><br>
+                    ${stats.blockedIPs}
                 </div>
                 <div class="stat-item">
-                    <strong>⛔ Blocked Users</strong><br>
-                    ${stats.blockedUsers || 0}
+                    <strong>🚫 Blocked Users</strong><br>
+                    ${stats.blockedUsers}
                 </div>
                 <div class="stat-item">
                     <strong>⏰ Server Uptime</strong><br>
-                    ${stats.serverUptime ? Math.floor(stats.serverUptime / 60) + 'm ' + Math.floor(stats.serverUptime % 60) + 's' : 'Unknown'}
+                    ${Math.floor(stats.serverUptime / 60)}m ${Math.floor(stats.serverUptime % 60)}s
+                </div>
+                <div class="stat-item">
+                    <strong>📅 Last Update</strong><br>
+                    ${new Date(stats.timestamp).toLocaleTimeString()}
                 </div>
             `;
         }
 
-        function updateBlockedList(blockedList) {
-            const blockedListElement = document.getElementById('blockedList');
-            const blockedCount = document.getElementById('blockedCount');
+        function updateSecurityStats(security) {
+            if (!security) return;
             
-            const totalBlocked = (blockedList.ips ? blockedList.ips.length : 0) + (blockedList.users ? blockedList.users.length : 0);
-            blockedCount.textContent = totalBlocked;
+            const securityStats = document.getElementById('securityStats');
+            securityStats.innerHTML = `
+                <div class="stat-item">
+                    <strong>🛡️ Blocked IPs</strong><br>
+                    ${security.blockedIPs || 0}
+                </div>
+                <div class="stat-item">
+                    <strong>🚫 Blocked Users</strong><br>
+                    ${security.blockedUsers || 0}
+                </div>
+                <div class="stat-item">
+                    <strong>📈 Rate Limited IPs</strong><br>
+                    ${security.rateLimitedIPs || 0}
+                </div>
+            `;
+        }
 
-            if (totalBlocked === 0) {
-                blockedListElement.innerHTML = '<div>No blocked items</div>';
-                return;
-            }
-
-            let html = '';
+        function updateBlockedLists(blockedList) {
+            // Update blocked IPs
+            const blockedIPsList = document.getElementById('blockedIPsList');
+            const blockedIPsCount = document.getElementById('blockedIPsCount');
             
-            if (blockedList.ips && blockedList.ips.length > 0) {
-                html += '<h5>🔒 Blocked IPs:</h5>';
-                html += blockedList.ips.map(ip => `
+            if (blockedList.ips.length === 0) {
+                blockedIPsList.innerHTML = '<div>No blocked IPs</div>';
+                blockedIPsCount.textContent = '0';
+            } else {
+                blockedIPsCount.textContent = blockedList.ips.length;
+                blockedIPsList.innerHTML = blockedList.ips.map(ip => `
                     <div class="blocked-item">
                         <strong>IP:</strong> ${ip.ip}<br>
-                        <strong>Reason:</strong> ${ip.reason || 'No reason provided'}<br>
-                        <strong>Blocked At:</strong> ${ip.timestamp ? new Date(ip.timestamp).toLocaleString() : 'Unknown'}<br>
-                        <strong>Blocked By:</strong> ${ip.blockedBy || 'Unknown'}<br>
-                        <button onclick="unblockTarget('${ip.ip}')" class="btn-unblock">🔓 Unblock IP</button>
-                    </div>
-                `).join('');
-            }
-            
-            if (blockedList.users && blockedList.users.length > 0) {
-                html += '<h5>🔒 Blocked Users:</h5>';
-                html += blockedList.users.map(user => `
-                    <div class="blocked-item">
-                        <strong>Socket ID:</strong> ${user.socketId}<br>
-                        <strong>Reason:</strong> ${user.reason || 'No reason provided'}<br>
-                        <strong>Blocked At:</strong> ${user.timestamp ? new Date(user.timestamp).toLocaleString() : 'Unknown'}<br>
-                        <strong>Blocked By:</strong> ${user.blockedBy || 'Unknown'}<br>
-                        <button onclick="unblockTarget('${user.socketId}')" class="btn-unblock">🔓 Unblock User</button>
+                        <strong>Reason:</strong> ${ip.reason}<br>
+                        <strong>Since:</strong> ${new Date(ip.timestamp).toLocaleString()}<br>
+                        <button onclick="unblockTarget('${ip.ip}')" class="btn-unblock">🔓 Unblock</button>
                     </div>
                 `).join('');
             }
 
-            blockedListElement.innerHTML = html;
+            // Update blocked users
+            const blockedUsersList = document.getElementById('blockedUsersList');
+            const blockedUsersCount = document.getElementById('blockedUsersCount');
+            
+            if (blockedList.users.length === 0) {
+                blockedUsersList.innerHTML = '<div>No blocked users</div>';
+                blockedUsersCount.textContent = '0';
+            } else {
+                blockedUsersCount.textContent = blockedList.users.length;
+                blockedUsersList.innerHTML = blockedList.users.map(user => `
+                    <div class="blocked-item">
+                        <strong>Socket ID:</strong> ${user.socketId}<br>
+                        <strong>Reason:</strong> ${user.reason}<br>
+                        <strong>Since:</strong> ${new Date(user.timestamp).toLocaleString()}<br>
+                        <button onclick="unblockTarget('${user.socketId}')" class="btn-unblock">🔓 Unblock</button>
+                    </div>
+                `).join('');
+            }
         }
 
         function updateChatHistory(history) {
             const historyElement = document.getElementById('chatHistory');
             
-            if (!history || history.length === 0) {
+            if (history.length === 0) {
                 historyElement.innerHTML = '<div>No chat history</div>';
                 return;
             }
 
-            // Show latest first
-            const reversedHistory = history.slice().reverse();
+            historyElement.innerHTML = history.slice().reverse().map(entry => {
+                let typeIcon = '💬';
+                if (entry.type === 'security_alert') typeIcon = '🚨';
+                if (entry.type === 'admin_action') typeIcon = '🔧';
+                if (entry.type === 'user_connected') typeIcon = '🔌';
+                if (entry.type === 'user_disconnected') typeIcon = '🔴';
+                
+                return `
+                    <div class="history-item">
+                        <strong>${typeIcon} [${entry.timestampReadable}]</strong><br>
+                        <strong>Socket:</strong> ${entry.socketId}<br>
+                        <strong>Type:</strong> ${entry.type}<br>
+                        <strong>Content:</strong> ${entry.content.substring(0, 100)}${entry.content.length > 100 ? '...' : ''}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // Tab management
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
             
-            historyElement.innerHTML = reversedHistory.map(entry => `
-                <div class="history-item">
-                    <strong>[${entry.timestampReadable || new Date(entry.timestamp).toLocaleString()}]</strong><br>
-                    <strong>Socket:</strong> ${entry.socketId}<br>
-                    <strong>Type:</strong> ${entry.type || 'unknown'}<br>
-                    <strong>Content:</strong> ${entry.content ? entry.content.substring(0, 100) + (entry.content.length > 100 ? '...' : '') : 'No content'}
-                </div>
-            `).join('');
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
         }
 
         // Admin actions
         function kickUser(socketId) {
             if (confirm(`Are you sure you want to kick user ${socketId}?`)) {
                 socket.emit('admin_kick_user', { socketId });
-                debugLog(`🚫 Kicking user: ${socketId}`);
             }
         }
 
         function blockUser(socketId) {
-            const reason = prompt(`Enter reason for blocking user ${socketId}:`, "Violation of terms");
+            const reason = prompt('Enter reason for blocking:', 'Violation of terms');
             if (reason !== null) {
                 socket.emit('admin_block_user', { socketId, reason });
-                debugLog(`⛔ Blocking user: ${socketId} - Reason: ${reason}`);
             }
         }
 
         function manualBlock() {
             const target = document.getElementById('manualBlockTarget').value.trim();
-            const reason = document.getElementById('manualBlockReason').value.trim() || "Manual block by admin";
+            const reason = document.getElementById('manualBlockReason').value.trim() || 'Manual block by admin';
             
             if (!target) {
-                alert('Please enter a Socket ID or IP address to block');
+                alert('Please enter a Socket ID or IP to block');
                 return;
             }
             
@@ -515,42 +500,12 @@
                 socket.emit('admin_manual_block', { socketId: target, reason });
                 document.getElementById('manualBlockTarget').value = '';
                 document.getElementById('manualBlockReason').value = '';
-                debugLog(`⛔ Manual block: ${target} - Reason: ${reason}`);
             }
         }
 
         function unblockTarget(target) {
             if (confirm(`Are you sure you want to unblock ${target}?`)) {
                 socket.emit('admin_unblock', { target });
-                debugLog(`🔓 Unblocking: ${target}`);
-            }
-        }
-
-        function manualUnblock() {
-            const target = document.getElementById('manualUnblockTarget').value.trim();
-            if (!target) {
-                alert('Please enter a Socket ID or IP address to unblock');
-                return;
-            }
-            
-            unblockTarget(target);
-            document.getElementById('manualUnblockTarget').value = '';
-        }
-
-        function clearAllBlocks() {
-            if (confirm('Are you sure you want to clear ALL blocks? This will unblock all IPs and users.')) {
-                // Unblock all IPs
-                currentBlockedList.ips.forEach(ip => {
-                    socket.emit('admin_unblock', { target: ip.ip });
-                });
-                
-                // Unblock all users
-                currentBlockedList.users.forEach(user => {
-                    socket.emit('admin_unblock', { target: user.socketId });
-                });
-                
-                debugLog('🗑️ Clearing all blocks');
-                alert('Unblock commands sent for all blocked items');
             }
         }
 
@@ -564,59 +519,63 @@
             if (confirm('Are you sure you want to broadcast this message to all users?')) {
                 socket.emit('admin_broadcast', { message });
                 document.getElementById('broadcastMessage').value = '';
-                debugLog(`📢 Broadcasting: ${message}`);
             }
+        }
+
+        // Refresh functions
+        function refreshAll() {
+            refreshUsers();
+            refreshStats();
+            refreshHistory();
+            getBlockedList();
         }
 
         function refreshUsers() {
             socket.emit('admin_get_stats');
-            debugLog('🔄 Refreshing users');
         }
 
-        function getStats() {
+        function refreshStats() {
             socket.emit('admin_get_stats');
-            debugLog('📊 Getting server stats');
-        }
-
-        function getHistory() {
-            socket.emit('admin_get_history');
-            debugLog('💬 Getting chat history');
         }
 
         function refreshHistory() {
             socket.emit('admin_get_history');
-            debugLog('🔄 Refreshing history');
         }
 
         function getBlockedList() {
             socket.emit('admin_get_blocked');
-            debugLog('🚫 Getting blocked list');
         }
 
-        // Initialize on load
-        window.onload = function() {
-            detectEnvironment();
-            debugLog('🚀 Admin panel loaded');
+        function showNotification(message) {
+            // Simple notification - you can replace with a better notification system
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: #28a745;
+                color: white;
+                padding: 10px 20px;
+                border-radius: 4px;
+                z-index: 1000;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
             
-            // Auto-connect if secret is present
+            setTimeout(() => {
+                document.body.removeChild(notification);
+            }, 3000);
+        }
+
+        // Auto-connect if values are present
+        window.onload = function() {
             const secret = document.getElementById('adminSecret').value;
             if (secret) {
                 setTimeout(() => {
-                    debugLog('🔓 Auto-connecting with saved secret...');
                     connectAsAdmin();
                 }, 1000);
             }
         };
-
-        // Handle page unload
-        window.addEventListener('beforeunload', function() {
-            if (socket) {
-                socket.disconnect();
-            }
-            if (adminUpdateInterval) {
-                clearInterval(adminUpdateInterval);
-            }
-        });
     </script>
 </body>
 </html>
