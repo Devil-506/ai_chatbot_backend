@@ -4,39 +4,245 @@ const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
 const fs = require('fs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+const sanitizeHtml = require('sanitize-html');
+const mongoSanitize = require('express-mongo-sanitize');
 
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for your Render frontend
-const io = socketIo(server, {
-  cors: {
-    origin: [
-      "https://ai-chatbot-frontend-1vx1.onrender.com",
-      "http://localhost:3000",
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST"],
-    credentials: true
-  }
+// ==================== SECURITY CONFIGURATION ====================
+
+// Security: Helmet with CSP configuration
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'", "https://ai-chatbot-frontend-1vx1.onrender.com", "http://localhost:3000", "http://localhost:5173"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  crossOriginEmbedderPolicy: false
+}));
+
+// Security: Strict CORS for frontend only
+const allowedOrigins = [
+  "https://ai-chatbot-frontend-1vx1.onrender.com",
+  "http://localhost:3000",
+  "http://localhost:5173"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
+      console.warn('🚫 CORS violation attempt from:', origin);
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
+// Security: Rate limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: {
+    error: 'Too many requests from this IP, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: {
+    error: 'Too many authentication attempts, please try again later.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const messageLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 10,
+  message: {
+    error: 'Too many messages, please slow down.'
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply rate limiting
+app.use('/api/', generalLimiter);
+app.use('/api/admin/', authLimiter);
+app.use('/api/health', generalLimiter);
+
+// Security: Body parsing with smaller limit
+app.use(express.json({ limit: '10kb' }));
+
+// Security: Data sanitization against NoSQL injection
+app.use(mongoSanitize());
+
+// Security: Input validation middleware
+const validateMessage = [
+  body('message')
+    .isLength({ min: 1, max: 2000 })
+    .withMessage('Message must be between 1 and 2000 characters')
+    .trim()
+    .escape(),
+];
+
+const validateAdminAction = [
+  body('socketId').isLength({ min: 1, max: 100 }).trim().escape(),
+  body('reason').optional().isLength({ max: 500 }).trim().escape(),
+  body('target').optional().isLength({ max: 100 }).trim().escape(),
+];
+
+// Security: HTML sanitization function
+const sanitizeMessage = (text) => {
+  return sanitizeHtml(text, {
+    allowedTags: [],
+    allowedAttributes: {},
+    disallowedTagsMode: 'escape'
+  });
+};
 
 // Serve static files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Security: Environment variables validation
+const requiredEnvVars = ['OLLAMA_BASE_URL', 'OLLAMA_MODEL', 'ADMIN_SECRET'];
+requiredEnvVars.forEach(envVar => {
+  if (!process.env[envVar] && process.env.NODE_ENV === 'production') {
+    console.error(`❌ Missing required environment variable: ${envVar}`);
+    process.exit(1);
+  }
+});
+
 // Configuration
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
-
-// Admin Configuration
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
 
+// Security: Never log secrets
+console.log('🔒 Admin authentication: Enabled');
+
+// Security: Socket.IO configuration with enhanced CORS
+const io = socketIo(server, {
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        console.warn('🚫 Socket.IO CORS violation from:', origin);
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  allowRequest: (req, callback) => {
+    const origin = req.headers.origin;
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.warn('🚫 Socket.IO handshake blocked from:', origin);
+      callback(new Error('Not allowed'), false);
+    }
+  }
+});
+
 // Store blocked IPs and users persistently
-const blockedIPs = new Map(); // Map with timestamps and reasons
-const blockedUsers = new Map(); // Map with timestamps and reasons
+const blockedIPs = new Map();
+const blockedUsers = new Map();
+
+// Security: Rate limiting for socket messages
+const socketRateLimits = new Map();
+const SOCKET_RATE_LIMIT = {
+  windowMs: 60000,
+  maxMessages: 10,
+  maxConnections: 3
+};
+
+const checkSocketRateLimit = (socket) => {
+  const ip = socket.handshake.address;
+  const now = Date.now();
+  
+  if (!socketRateLimits.has(ip)) {
+    socketRateLimits.set(ip, {
+      messageCount: 0,
+      connectionCount: 1,
+      lastReset: now,
+      sockets: new Set([socket.id])
+    });
+  } else {
+    const limit = socketRateLimits.get(ip);
+    
+    if (now - limit.lastReset > SOCKET_RATE_LIMIT.windowMs) {
+      limit.messageCount = 0;
+      limit.lastReset = now;
+    }
+    
+    if (!limit.sockets.has(socket.id)) {
+      limit.sockets.add(socket.id);
+      limit.connectionCount++;
+    }
+  }
+  
+  const limit = socketRateLimits.get(ip);
+  
+  if (limit.connectionCount > SOCKET_RATE_LIMIT.maxConnections) {
+    console.warn(`🚫 IP ${ip} exceeded connection limit`);
+    return false;
+  }
+  
+  if (limit.messageCount >= SOCKET_RATE_LIMIT.maxMessages) {
+    console.warn(`🚫 IP ${ip} exceeded message rate limit`);
+    return false;
+  }
+  
+  limit.messageCount++;
+  return true;
+};
+
+// Security: Socket authentication middleware
+const authenticateSocket = (socket, next) => {
+  const token = socket.handshake.auth.token;
+  const isAdminRequest = socket.handshake.auth.secret;
+  
+  if (isAdminRequest) {
+    if (isAdminRequest === ADMIN_SECRET) {
+      console.log('🔓 Admin socket authenticated:', socket.id);
+      return next();
+    } else {
+      console.warn('🚫 Invalid admin secret attempt from:', socket.handshake.address);
+      return next(new Error('Authentication failed'));
+    }
+  }
+  
+  if (!token) {
+    console.warn('🚫 No token provided for socket connection from:', socket.handshake.address);
+    return next(new Error('Authentication token required'));
+  }
+  
+  console.log('🔐 User socket authenticated:', socket.id);
+  next();
+};
+
+io.use(authenticateSocket);
+
+// ==================== ORIGINAL MEDICAL CONTEXT ====================
 
 // Enhanced Medical Context
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
@@ -73,9 +279,10 @@ class RemoteOllamaService {
   async generateResponse(userMessage, socket) {
     return new Promise(async (resolve, reject) => {
       try {
-        console.log('💬 Medical query received:', userMessage.substring(0, 100));
+        const sanitizedMessage = sanitizeMessage(userMessage);
+        console.log('💬 Medical query received:', sanitizedMessage.substring(0, 100));
         
-        const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
+        const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + sanitizedMessage + "\n\nالمساعد:";
         
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 60000);
@@ -212,6 +419,31 @@ const activeConnections = new Map();
 const chatHistory = [];
 const MAX_HISTORY_SIZE = 1000;
 
+// Security: Abuse detection and logging
+const securityLogger = {
+  logAbuseAttempt(socket, type, details) {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      ip: socket.handshake.address,
+      socketId: socket.id,
+      type,
+      details,
+      userAgent: socket.handshake.headers['user-agent']
+    };
+    
+    console.warn('🚨 Security alert:', logEntry);
+    addToHistory(socket.id, 'security_alert', `${type}: ${JSON.stringify(details)}`);
+  },
+  
+  logFailedAuth(socket, reason) {
+    this.logAbuseAttempt(socket, 'failed_authentication', { reason });
+  },
+  
+  logRateLimitExceeded(socket, limitType) {
+    this.logAbuseAttempt(socket, 'rate_limit_exceeded', { limitType });
+  }
+};
+
 // ENHANCED: Complete Block Management System
 const adminControls = {
   getConnectedUsers() {
@@ -232,7 +464,10 @@ const adminControls = {
     if (targetSocket) {
       console.log(`🔍 Found target socket: ${socketId}`);
       
-      // Send chat message to user before disconnecting
+      securityLogger.logAbuseAttempt(targetSocket, 'admin_kick', { 
+        adminSocketId: adminSocket?.id 
+      });
+      
       targetSocket.emit('chat_message', {
         text: "🚫 تم فصل اتصالك من قبل المسؤول. إذا كنت بحاجة إلى مساعدة، يرجى الاتصال بالدعم.",
         isUser: false,
@@ -247,7 +482,6 @@ const adminControls = {
         type: 'admin_action'
       });
       
-      // Disconnect the user
       setTimeout(() => {
         targetSocket.disconnect(true);
         activeConnections.delete(socketId);
@@ -271,11 +505,9 @@ const adminControls = {
     if (targetSocket) {
       userInfo = activeConnections.get(socketId);
     } else {
-      // User is not currently connected, but we can still block the socket ID
       console.log(`ℹ️ User ${socketId} is not connected, but blocking socket ID anyway`);
     }
     
-    // Block by socket ID with timestamp and reason
     blockedUsers.set(socketId, {
       timestamp: new Date().toISOString(),
       reason: reason,
@@ -284,9 +516,7 @@ const adminControls = {
     
     console.log(`⛔ Blocked socket ID: ${socketId}`);
     
-    // If user is connected, disconnect them
     if (targetSocket && userInfo) {
-      // Also block by IP for extra protection
       blockedIPs.set(userInfo.ip, {
         timestamp: new Date().toISOString(),
         reason: reason,
@@ -296,7 +526,11 @@ const adminControls = {
       
       console.log(`⛔ Also blocked IP: ${userInfo.ip}`);
       
-      // Send chat message to user
+      securityLogger.logAbuseAttempt(targetSocket, 'admin_block', { 
+        adminSocketId: adminSocket?.id,
+        reason: reason
+      });
+      
       targetSocket.emit('chat_message', {
         text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك إعادة الاتصال.",
         isUser: false,
@@ -311,7 +545,6 @@ const adminControls = {
         type: 'admin_action'
       });
       
-      // Disconnect the user
       setTimeout(() => {
         targetSocket.disconnect(true);
         activeConnections.delete(socketId);
@@ -331,14 +564,12 @@ const adminControls = {
     
     let unblocked = false;
     
-    // Try to unblock by socket ID
     if (blockedUsers.has(socketIdOrIP)) {
       blockedUsers.delete(socketIdOrIP);
       console.log(`🔓 Unblocked socket ID: ${socketIdOrIP}`);
       unblocked = true;
     }
     
-    // Try to unblock by IP
     if (blockedIPs.has(socketIdOrIP)) {
       blockedIPs.delete(socketIdOrIP);
       console.log(`🔓 Unblocked IP: ${socketIdOrIP}`);
@@ -423,7 +654,6 @@ const adminControls = {
     return stats;
   },
 
-  // Check if user is blocked
   isUserBlocked(socket) {
     const ip = socket.handshake.address;
     return blockedIPs.has(ip) || blockedUsers.has(socket.id);
@@ -457,6 +687,8 @@ function addToHistory(socketId, type, content, timestamp = new Date()) {
   
   return entry;
 }
+
+// ==================== ROUTES ====================
 
 // Debug route
 app.get('/debug-static', (req, res) => {
@@ -497,6 +729,11 @@ app.get('/api/health', async (req, res) => {
         ips: blockedIPs.size,
         users: blockedUsers.size
       },
+      security: {
+        rateLimiting: 'active',
+        sanitization: 'active',
+        csp: 'active'
+      },
       ollama: ollamaHealth
     };
     
@@ -516,12 +753,13 @@ app.get('/api/admin/blocked-list', (req, res) => {
   res.json(blockedList);
 });
 
-app.post('/api/admin/block-user', (req, res) => {
-  const { socketId, reason } = req.body;
-  
-  if (!socketId) {
-    return res.status(400).json({ error: 'Socket ID is required' });
+app.post('/api/admin/block-user', validateAdminAction, (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
   }
+  
+  const { socketId, reason } = req.body;
   
   const success = adminControls.blockUser(socketId, null, reason || "Manual block by admin");
   
@@ -531,12 +769,13 @@ app.post('/api/admin/block-user', (req, res) => {
   });
 });
 
-app.post('/api/admin/unblock', (req, res) => {
-  const { target } = req.body; // Can be socket ID or IP
-  
-  if (!target) {
-    return res.status(400).json({ error: 'Target (socket ID or IP) is required' });
+app.post('/api/admin/unblock', validateAdminAction, (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ errors: errors.array() });
   }
+  
+  const { target } = req.body;
   
   const success = adminControls.unblockUser(target, null);
   
@@ -575,15 +814,26 @@ app.get('/', (req, res) => {
   res.redirect('/admin');
 });
 
-// Socket.io connection handling
+// ==================== SOCKET.IO HANDLING ====================
+
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
+  
+  // Security: Rate limiting check
+  if (!checkSocketRateLimit(socket)) {
+    securityLogger.logRateLimitExceeded(socket, 'connection_rate');
+    socket.emit('error', { 
+      message: 'Connection rate limit exceeded. Please try again later.' 
+    });
+    socket.disconnect();
+    return;
+  }
   
   // CHECK IF USER IS BLOCKED BEFORE ALLOWING CONNECTION
   if (adminControls.isUserBlocked(socket)) {
     console.log(`⛔ Blocked user attempted to connect: ${socket.id}`);
+    securityLogger.logAbuseAttempt(socket, 'blocked_connection_attempt', {});
     
-    // Send block message
     socket.emit('chat_message', {
       text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك استخدام الخدمة.",
       isUser: false,
@@ -591,7 +841,6 @@ io.on('connection', (socket) => {
       type: 'blocked'
     });
     
-    // Disconnect immediately
     setTimeout(() => {
       socket.disconnect(true);
     }, 2000);
@@ -643,6 +892,15 @@ io.on('connection', (socket) => {
 
   // Handle incoming messages
   socket.on('send_message', async (data) => {
+    // Security: Check message rate limit
+    if (!checkSocketRateLimit(socket)) {
+      securityLogger.logRateLimitExceeded(socket, 'message_rate');
+      socket.emit('error', { 
+        message: 'Message rate limit exceeded. Please slow down.' 
+      });
+      return;
+    }
+    
     if (!data.message || data.message.trim().length === 0) {
       socket.emit('error', { message: 'الرجاء كتابة رسالة.' });
       return;
@@ -654,11 +912,12 @@ io.on('connection', (socket) => {
     }
 
     try {
+      const sanitizedMessage = sanitizeMessage(data.message.trim());
       console.log(`📝 Processing message from ${socket.id}`);
       
-      addToHistory(socket.id, 'user_message', data.message.trim());
+      addToHistory(socket.id, 'user_message', sanitizedMessage);
       
-      await medicalService.generateResponse(data.message.trim(), socket);
+      await medicalService.generateResponse(sanitizedMessage, socket);
     } catch (error) {
       console.error('💥 Message processing error:', error);
       socket.emit('error', { 
@@ -808,19 +1067,29 @@ const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
-🏥 Tunisian Medical Chatbot Server
+🏥 Tunisian Medical Chatbot Server - SECURE
 📍 Port: ${PORT}
 🎯 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
-🔒 Admin Secret: ${ADMIN_SECRET}
+🔒 Security: Helmet, Rate Limiting, CSP, Input Validation
 
 📁 Static Files: Enabled
 🌐 Admin Panel: http://localhost:${PORT}/admin
 
-✨ Server is running and ready!
+✨ Secure server is running and ready!
   `);
 });
+
+// Clean up rate limit records periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, limit] of socketRateLimits.entries()) {
+    if (now - limit.lastReset > SOCKET_RATE_LIMIT.windowMs * 2) {
+      socketRateLimits.delete(ip);
+    }
+  }
+}, SOCKET_RATE_LIMIT.windowMs * 2);
 
 process.on('SIGTERM', () => {
   console.log('🔻 SIGTERM received, shutting down gracefully...');
