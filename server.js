@@ -10,15 +10,15 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const server = http.createServer(app);
 
-// ==================== RENDER FIXES ====================
+// ==================== ENHANCED SECURITY & RENDER COMPATIBILITY ====================
 
 // Security: Helmet with Render-compatible CSP
 app.use(helmet({
-  contentSecurityPolicy: false, // Disable CSP for Render compatibility
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false
 }));
 
-// Security: CORS for Render
+// Security: Enhanced CORS for Render
 const allowedOrigins = [
   "https://ai-chatbot-frontend-1vx1.onrender.com",
   "http://localhost:3000", 
@@ -27,9 +27,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
     if (allowedOrigins.indexOf(origin) === -1) {
       const msg = `CORS policy: Origin ${origin} not allowed`;
       console.warn('🚫 CORS violation attempt from:', origin);
@@ -43,7 +41,7 @@ app.use(cors({
 // Security: Rate limiting (Render-compatible)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200, // Increased for Render
+  max: 200,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -51,7 +49,7 @@ const generalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10, // Increased for Render
+  max: 10,
   message: 'Too many authentication attempts, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
@@ -62,31 +60,34 @@ app.use(generalLimiter);
 app.use('/api/admin/', authLimiter);
 
 // Security: Body parsing with reasonable limit for Render
-app.use(express.json({ limit: '50kb' })); // Increased for medical queries
+app.use(express.json({ limit: '50kb' }));
+app.use(express.urlencoded({ extended: true, limit: '50kb' }));
 
 // Serve static files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuration with Render defaults
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'render-default-secret-2024';
-
-console.log('🔧 Configuration loaded for Render');
-console.log('🔗 Ollama URL:', OLLAMA_BASE_URL);
-console.log('🤖 Model:', OLLAMA_MODEL);
-
-// Security: Socket.IO configuration for Render
+// Socket.IO configuration for Render with enhanced security
 const io = socketIo(server, {
   cors: {
     origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling'] // Added for Render compatibility
+  transports: ['websocket', 'polling']
 });
 
-// Store blocked IPs and users
+// Configuration
+const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
+
+// Admin Configuration
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
+
+console.log('🔧 Enhanced Configuration loaded for Render');
+console.log('🔗 Ollama URL:', OLLAMA_BASE_URL);
+console.log('🤖 Model:', OLLAMA_MODEL);
+
+// Store blocked IPs and users persistently
 const blockedIPs = new Map();
 const blockedUsers = new Map();
 
@@ -94,12 +95,12 @@ const blockedUsers = new Map();
 const socketRateLimits = new Map();
 const SOCKET_RATE_LIMIT = {
   windowMs: 60000,
-  maxMessages: 15, // Increased for Render
-  maxConnections: 5 // Increased for Render
+  maxMessages: 30,
+  maxConnections: 10
 };
 
 const checkSocketRateLimit = (socket) => {
-  const ip = socket.handshake.address;
+  const ip = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
   const now = Date.now();
   
   if (!socketRateLimits.has(ip)) {
@@ -142,8 +143,7 @@ const checkSocketRateLimit = (socket) => {
   return true;
 };
 
-// ==================== ORIGINAL MEDICAL CONTEXT ====================
-
+// Enhanced Medical Context
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
 1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
@@ -183,7 +183,7 @@ class RemoteOllamaService {
         const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
         
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 90000); // Increased timeout for Render
+        const timeout = setTimeout(() => controller.abort(), 120000); // Increased timeout for Render
 
         console.log('🔗 Calling Ollama API...');
         const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
@@ -284,7 +284,7 @@ class RemoteOllamaService {
   async healthCheck() {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000); // Increased for Render
+      const timeout = setTimeout(() => controller.abort(), 15000);
       
       const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
         signal: controller.signal
@@ -320,25 +320,9 @@ const activeConnections = new Map();
 
 // Store chat history for admin monitoring
 const chatHistory = [];
-const MAX_HISTORY_SIZE = 500; // Reduced for Render
+const MAX_HISTORY_SIZE = 1000;
 
-// Security logging
-const securityLogger = {
-  logAbuseAttempt(socket, type, details) {
-    const logEntry = {
-      timestamp: new Date().toISOString(),
-      ip: socket.handshake.address,
-      socketId: socket.id,
-      type,
-      details
-    };
-    
-    console.warn('🚨 Security alert:', logEntry);
-    addToHistory(socket.id, 'security_alert', `${type}: ${JSON.stringify(details)}`);
-  }
-};
-
-// Admin Controls (simplified for Render)
+// ENHANCED: Complete Block Management System
 const adminControls = {
   getConnectedUsers() {
     const users = Array.from(activeConnections.entries()).map(([id, info]) => ({
@@ -347,123 +331,211 @@ const adminControls = {
       connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's',
       isBlocked: blockedIPs.has(info.ip) || blockedUsers.has(id)
     }));
+    console.log('👥 Admin: Current connected users:', users.length);
     return users;
   },
 
   kickUser(socketId, adminSocket) {
+    console.log(`🚫 Admin: Attempting to kick user: ${socketId}`);
+    
     const targetSocket = io.sockets.sockets.get(socketId);
     if (targetSocket) {
+      console.log(`🔍 Found target socket: ${socketId}`);
+      
+      // Send chat message to user before disconnecting
       targetSocket.emit('chat_message', {
-        text: "🚫 تم فصل اتصالك من قبل المسؤول.",
+        text: "🚫 تم فصل اتصالك من قبل المسؤول. إذا كنت بحاجة إلى مساعدة، يرجى الاتصال بالدعم.",
         isUser: false,
         timestamp: new Date().toISOString(),
         type: 'admin_action'
       });
       
+      targetSocket.emit('streaming_response', {
+        text: "🚫 تم فصل اتصالك من قبل المسؤول. إذا كنت بحاجة إلى مساعدة، يرجى الاتصال بالدعم.",
+        partial: false,
+        complete: true,
+        type: 'admin_action'
+      });
+      
+      // Disconnect the user
       setTimeout(() => {
         targetSocket.disconnect(true);
         activeConnections.delete(socketId);
       }, 1000);
       
-      addToHistory(socketId, 'admin_action', `User kicked by admin`);
+      addToHistory(socketId, 'admin_action', `User ${socketId} was kicked by admin`);
+      
+      console.log(`🔴 Admin: SUCCESS - Kicked user: ${socketId}`);
       return true;
     }
+    console.log(`❌ Admin: User not found: ${socketId}`);
     return false;
   },
 
   blockUser(socketId, adminSocket, reason = "Blocked by admin") {
+    console.log(`⛔ Admin: Attempting to block user: ${socketId}`);
+    
     const targetSocket = io.sockets.sockets.get(socketId);
     let userInfo = null;
     
     if (targetSocket) {
       userInfo = activeConnections.get(socketId);
+    } else {
+      // User is not currently connected, but we can still block the socket ID
+      console.log(`ℹ️ User ${socketId} is not connected, but blocking socket ID anyway`);
     }
     
+    // Block by socket ID with timestamp and reason
     blockedUsers.set(socketId, {
       timestamp: new Date().toISOString(),
-      reason: reason
+      reason: reason,
+      blockedBy: adminSocket?.id || 'admin'
     });
     
+    console.log(`⛔ Blocked socket ID: ${socketId}`);
+    
+    // If user is connected, disconnect them
     if (targetSocket && userInfo) {
+      // Also block by IP for extra protection
       blockedIPs.set(userInfo.ip, {
         timestamp: new Date().toISOString(),
         reason: reason,
+        blockedBy: adminSocket?.id || 'admin',
         socketId: socketId
       });
       
+      console.log(`⛔ Also blocked IP: ${userInfo.ip}`);
+      
+      // Send chat message to user
       targetSocket.emit('chat_message', {
-        text: "⛔ تم حظر اتصالك من قبل المسؤول.",
+        text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك إعادة الاتصال.",
         isUser: false,
         timestamp: new Date().toISOString(),
         type: 'admin_action'
       });
       
+      targetSocket.emit('streaming_response', {
+        text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك إعادة الاتصال.",
+        partial: false,
+        complete: true,
+        type: 'admin_action'
+      });
+      
+      // Disconnect the user
       setTimeout(() => {
         targetSocket.disconnect(true);
         activeConnections.delete(socketId);
       }, 1000);
+      
+      addToHistory(socketId, 'admin_action', `User ${socketId} (IP: ${userInfo.ip}) was blocked by admin: ${reason}`);
+    } else {
+      addToHistory(socketId, 'admin_action', `Socket ID ${socketId} was blocked by admin: ${reason}`);
     }
     
+    console.log(`⛔ Admin: SUCCESS - Blocked user: ${socketId}`);
     return true;
   },
 
   unblockUser(socketIdOrIP, adminSocket) {
+    console.log(`🔓 Admin: Attempting to unblock: ${socketIdOrIP}`);
+    
     let unblocked = false;
     
+    // Try to unblock by socket ID
     if (blockedUsers.has(socketIdOrIP)) {
       blockedUsers.delete(socketIdOrIP);
+      console.log(`🔓 Unblocked socket ID: ${socketIdOrIP}`);
       unblocked = true;
     }
     
+    // Try to unblock by IP
     if (blockedIPs.has(socketIdOrIP)) {
       blockedIPs.delete(socketIdOrIP);
+      console.log(`🔓 Unblocked IP: ${socketIdOrIP}`);
       unblocked = true;
     }
     
-    return unblocked;
+    if (unblocked) {
+      addToHistory('admin', 'admin_action', `Admin unblocked: ${socketIdOrIP}`);
+      console.log(`🔓 Admin: SUCCESS - Unblocked: ${socketIdOrIP}`);
+      return true;
+    } else {
+      console.log(`❌ Admin: Not found in blocked lists: ${socketIdOrIP}`);
+      return false;
+    }
   },
 
   getBlockedList() {
-    return {
-      ips: Array.from(blockedIPs.entries()).map(([ip, info]) => ({ ip, ...info })),
-      users: Array.from(blockedUsers.entries()).map(([socketId, info]) => ({ socketId, ...info }))
+    const blockedList = {
+      ips: Array.from(blockedIPs.entries()).map(([ip, info]) => ({
+        ip,
+        ...info
+      })),
+      users: Array.from(blockedUsers.entries()).map(([socketId, info]) => ({
+        socketId,
+        ...info
+      }))
     };
+    
+    console.log(`📋 Admin: Blocked list requested - IPs: ${blockedList.ips.length}, Users: ${blockedList.users.length}`);
+    return blockedList;
   },
 
   broadcastToAll(message, adminSocket) {
+    console.log(`📢 Admin: Broadcasting to ${activeConnections.size} users:`, message);
+    
     const adminMessage = {
       text: `📢 إشعار من المسؤول: ${message}`,
       isUser: false,
       timestamp: new Date().toISOString(),
-      type: 'admin_broadcast'
+      type: 'admin_broadcast',
+      from: 'المسؤول'
     };
     
-    let recipients = 0;
     activeConnections.forEach((info, socketId) => {
       const userSocket = io.sockets.sockets.get(socketId);
       if (userSocket && userSocket.connected) {
         userSocket.emit('chat_message', adminMessage);
-        recipients++;
+        userSocket.emit('streaming_response', {
+          text: adminMessage.text,
+          partial: false,
+          complete: true,
+          type: 'admin_broadcast'
+        });
+        
+        console.log(`📢 Sent admin message to user: ${socketId}`);
       }
     });
     
+    io.emit('admin_announcement', {
+      message: message,
+      timestamp: new Date().toISOString(),
+      from: 'System Admin'
+    });
+    
     addToHistory('admin', 'broadcast', `Admin broadcast: ${message}`);
-    return recipients;
+    
+    console.log(`📢 Admin: SUCCESS - Broadcast sent to ${activeConnections.size} users`);
+    return activeConnections.size;
   },
 
   getServerStats() {
-    return {
+    const stats = {
       totalConnections: activeConnections.size,
       chatHistorySize: chatHistory.length,
       blockedIPs: blockedIPs.size,
       blockedUsers: blockedUsers.size,
       serverUptime: process.uptime(),
+      memoryUsage: process.memoryUsage(),
       timestamp: new Date().toISOString()
     };
+    console.log('📊 Admin: Server stats requested');
+    return stats;
   },
 
+  // Check if user is blocked
   isUserBlocked(socket) {
-    const ip = socket.handshake.address;
+    const ip = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
     return blockedIPs.has(ip) || blockedUsers.has(socket.id);
   }
 };
@@ -471,17 +543,26 @@ const adminControls = {
 // Function to add message to history
 function addToHistory(socketId, type, content, timestamp = new Date()) {
   const entry = {
-    id: `${socketId}-${Date.now()}`,
+    id: `${socketId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     socketId,
     type,
     content,
-    timestamp: timestamp.toISOString()
+    timestamp: timestamp.toISOString(),
+    timestampReadable: timestamp.toLocaleString('en-US', { 
+      timeZone: 'Africa/Tunis',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
   };
   
   chatHistory.push(entry);
   
   if (chatHistory.length > MAX_HISTORY_SIZE) {
-    chatHistory.shift(); // Remove oldest entry
+    chatHistory.splice(0, chatHistory.length - MAX_HISTORY_SIZE);
   }
   
   return entry;
@@ -489,17 +570,45 @@ function addToHistory(socketId, type, content, timestamp = new Date()) {
 
 // ==================== ROUTES ====================
 
-// Health check endpoint (essential for Render)
+// Debug route
+app.get('/debug-static', (req, res) => {
+  const publicPath = path.join(__dirname, 'public');
+  let files = [];
+  
+  try {
+    if (fs.existsSync(publicPath)) {
+      files = fs.readdirSync(publicPath);
+    }
+  } catch (error) {
+    console.error('Error reading public directory:', error);
+  }
+  
+  res.json({
+    message: 'Static files debug information',
+    publicPath: publicPath,
+    publicExists: fs.existsSync(publicPath),
+    files: files,
+    adminHtmlExists: fs.existsSync(path.join(publicPath, 'admin.html')),
+    currentDir: __dirname
+  });
+});
+
+// Health check endpoint
 app.get('/api/health', async (req, res) => {
   try {
     const ollamaHealth = await medicalService.healthCheck();
     
     const healthStatus = {
       status: 'OK',
-      service: 'Tunisian Medical Chatbot - Render',
+      service: 'Tunisian Medical Chatbot - Enhanced Render Edition',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      memory: process.memoryUsage(),
       connections: activeConnections.size,
+      blocked: {
+        ips: blockedIPs.size,
+        users: blockedUsers.size
+      },
       ollama: ollamaHealth,
       environment: process.env.NODE_ENV || 'development'
     };
@@ -514,7 +623,7 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Render-compatible admin endpoints
+// Admin endpoints for block management
 app.get('/api/admin/blocked-list', (req, res) => {
   const blockedList = adminControls.getBlockedList();
   res.json(blockedList);
@@ -531,23 +640,29 @@ app.post('/api/admin/block-user', (req, res) => {
   
   res.json({
     success: success,
-    message: success ? `User ${socketId} blocked` : `Failed to block user`
+    message: success ? `User ${socketId} blocked successfully` : `Failed to block user ${socketId}`
   });
 });
 
 app.post('/api/admin/unblock', (req, res) => {
-  const { target } = req.body;
+  const { target } = req.body; // Can be socket ID or IP
   
   if (!target) {
-    return res.status(400).json({ error: 'Target is required' });
+    return res.status(400).json({ error: 'Target (socket ID or IP) is required' });
   }
   
   const success = adminControls.unblockUser(target, null);
   
   res.json({
     success: success,
-    message: success ? `${target} unblocked` : `Target not found`
+    message: success ? `${target} unblocked successfully` : `${target} not found in blocked list`
   });
+});
+
+// Simple admin stats endpoint
+app.get('/api/admin/stats', (req, res) => {
+  const stats = adminControls.getServerStats();
+  res.json(stats);
 });
 
 // Simple test endpoint
@@ -564,23 +679,23 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Root route
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Root route - redirect to admin
 app.get('/', (req, res) => {
-  res.json({
-    message: '🏥 Tunisian Medical Chatbot Server',
-    status: 'Running on Render',
-    endpoints: {
-      health: '/api/health',
-      admin: '/admin',
-      test: '/api/test'
-    }
-  });
+  res.redirect('/admin');
 });
 
 // ==================== SOCKET.IO FOR RENDER ====================
 
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
+  
+  // Get real IP behind proxy (Render compatibility)
+  const clientIP = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+  console.log('📡 Client IP:', clientIP);
   
   // Security: Rate limiting check
   if (!checkSocketRateLimit(socket)) {
@@ -591,36 +706,66 @@ io.on('connection', (socket) => {
     return;
   }
   
-  // Check if user is blocked
+  // CHECK IF USER IS BLOCKED BEFORE ALLOWING CONNECTION
   if (adminControls.isUserBlocked(socket)) {
+    console.log(`⛔ Blocked user attempted to connect: ${socket.id}`);
+    
+    // Send block message
     socket.emit('chat_message', {
-      text: "⛔ تم حظر اتصالك من قبل المسؤول.",
+      text: "⛔ تم حظر اتصالك من قبل المسؤول. لا يمكنك استخدام الخدمة.",
       isUser: false,
       timestamp: new Date().toISOString(),
       type: 'blocked'
     });
     
+    // Disconnect immediately
     setTimeout(() => {
       socket.disconnect(true);
     }, 2000);
+    
     return;
   }
   
   const userInfo = {
     connectedAt: new Date(),
-    ip: socket.handshake.address,
+    ip: clientIP,
     userAgent: socket.handshake.headers['user-agent'],
     isAdmin: false
   };
   
   activeConnections.set(socket.id, userInfo);
-  addToHistory(socket.id, 'user_connected', `User connected`);
+  
+  addToHistory(socket.id, 'user_connected', `User connected from ${userInfo.ip}`);
 
   // Send welcome message
   socket.emit('welcome', {
     message: 'أهلاً وسهلاً! أنا مساعدك الطبي التونسي. كيف يمكنني مساعدتك اليوم؟',
     id: socket.id,
     timestamp: new Date().toISOString()
+  });
+
+  // Handle admin announcements as chat messages
+  socket.on('admin_announcement', (data) => {
+    console.log(`📢 User ${socket.id} received admin announcement:`, data.message);
+    
+    socket.emit('chat_message', {
+      text: `📢 إشعار من المسؤول: ${data.message}`,
+      isUser: false,
+      timestamp: data.timestamp,
+      type: 'admin_broadcast'
+    });
+  });
+
+  // Handle admin messages (warnings, kicks)
+  socket.on('admin_message', (data) => {
+    console.log(`⚠️ User ${socket.id} received admin message:`, data.message);
+    
+    socket.emit('chat_message', {
+      text: `⚠️ ${data.message}`,
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      type: 'admin_action'
+    });
   });
 
   // Handle incoming messages
@@ -646,8 +791,16 @@ io.on('connection', (socket) => {
     try {
       console.log(`📝 Processing message from ${socket.id}`);
       
+      // Add user message to chat
+      socket.emit('chat_message', {
+        text: data.message,
+        isUser: true,
+        timestamp: new Date().toISOString()
+      });
+      
       addToHistory(socket.id, 'user_message', data.message.trim());
       
+      // Get AI response
       await medicalService.generateResponse(data.message.trim(), socket);
     } catch (error) {
       console.error('💥 Message processing error:', error);
@@ -660,12 +813,21 @@ io.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log('🔌 User disconnected:', socket.id, 'Reason:', reason);
+    
+    addToHistory(socket.id, 'user_disconnected', `User disconnected: ${reason}`);
+    
     activeConnections.delete(socket.id);
   });
 
-  // Admin system
+  // Handle errors
+  socket.on('error', (error) => {
+    console.error('💥 Socket error:', error);
+  });
+
+  // ==================== COMPLETE ADMIN SYSTEM ====================
+  
   if (socket.handshake.auth && socket.handshake.auth.secret === ADMIN_SECRET) {
-    console.log('🔓 Admin connected:', socket.id);
+    console.log('🔓 Admin connected via WebSocket:', socket.id);
     
     userInfo.isAdmin = true;
     activeConnections.set(socket.id, userInfo);
@@ -674,41 +836,91 @@ io.on('connection', (socket) => {
       message: '🔓 أنت متصل كمسؤول',
       users: adminControls.getConnectedUsers(),
       stats: adminControls.getServerStats(),
-      socketId: socket.id
+      socketId: socket.id,
+      blockedCount: {
+        ips: blockedIPs.size,
+        users: blockedUsers.size
+      }
     });
 
     // Admin event handlers
     socket.on('admin_kick_user', (data) => {
+      console.log(`🔧 Admin kick_user event:`, data);
       const success = adminControls.kickUser(data.socketId, socket);
       socket.emit('admin_action_result', {
         action: 'kick_user',
         success: success,
-        message: success ? `تم فصل المستخدم` : `لم يتم العثور على المستخدم`
+        message: success ? `تم فصل المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
       });
     });
 
     socket.on('admin_block_user', (data) => {
+      console.log(`🔧 Admin block_user event:`, data);
       const success = adminControls.blockUser(data.socketId, socket, data.reason);
       socket.emit('admin_action_result', {
         action: 'block_user',
         success: success,
-        message: success ? `تم حظر المستخدم` : `فشل في الحظر`
+        message: success ? `تم حظر المستخدم ${data.socketId}` : `فشل في حظر المستخدم ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_unblock', (data) => {
+      console.log(`🔧 Admin unblock event:`, data);
+      const success = adminControls.unblockUser(data.target, socket);
+      socket.emit('admin_action_result', {
+        action: 'unblock',
+        success: success,
+        message: success ? `تم إلغاء حظر ${data.target}` : `لم يتم العثور على ${data.target} في القائمة المحظورة`
+      });
+    });
+
+    socket.on('admin_manual_block', (data) => {
+      console.log(`🔧 Admin manual_block event:`, data);
+      const success = adminControls.blockUser(data.socketId, socket, data.reason || "Manual block by admin");
+      socket.emit('admin_action_result', {
+        action: 'manual_block',
+        success: success,
+        message: success ? `تم حظر السوكيت ${data.socketId} يدوياً` : `فشل في حظر السوكيت ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_broadcast', (data) => {
+      console.log(`🔧 Admin broadcast event:`, data);
+      const recipients = adminControls.broadcastToAll(data.message, socket);
+      socket.emit('admin_action_result', {
+        action: 'broadcast',
+        success: true,
+        message: `تم إرسال الإشعار إلى ${recipients} مستخدم`
       });
     });
 
     socket.on('admin_get_stats', () => {
+      console.log(`🔧 Admin get_stats event`);
       socket.emit('admin_stats', adminControls.getServerStats());
     });
 
-    // Send periodic updates to admin
+    socket.on('admin_get_history', () => {
+      console.log(`🔧 Admin get_history event`);
+      socket.emit('admin_chat_history', chatHistory.slice(-50));
+    });
+
+    socket.on('admin_get_blocked', () => {
+      console.log(`🔧 Admin get_blocked event`);
+      const blockedList = adminControls.getBlockedList();
+      socket.emit('admin_blocked_list', blockedList);
+    });
+
+    // Send user updates to admin in real-time every 3 seconds
     const adminUpdateInterval = setInterval(() => {
-      if (socket.connected) {
-        socket.emit('admin_users_update', {
-          users: adminControls.getConnectedUsers(),
-          stats: adminControls.getServerStats()
-        });
-      }
-    }, 5000);
+      socket.emit('admin_users_update', {
+        users: adminControls.getConnectedUsers(),
+        stats: adminControls.getServerStats(),
+        blockedCount: {
+          ips: blockedIPs.size,
+          users: blockedUsers.size
+        }
+      });
+    }, 3000);
 
     socket.on('disconnect', () => {
       clearInterval(adminUpdateInterval);
@@ -721,7 +933,8 @@ io.on('connection', (socket) => {
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
-    message: 'عذرًا، المسار غير موجود.'
+    message: 'عذرًا، المسار غير موجود.',
+    requestedUrl: req.originalUrl
   });
 });
 
@@ -734,23 +947,22 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Render-specific port configuration
 const PORT = process.env.PORT || 10000;
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
-🚀 Tunisian Medical Chatbot - RENDER EDITION
+🏥 Tunisian Medical Chatbot Server - ENHANCED RENDER EDITION
 📍 Port: ${PORT}
-🌐 Environment: ${process.env.NODE_ENV || 'development'}
+🎯 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
+🔒 Admin Secret: ${ADMIN_SECRET}
 
-✅ Server is running on Render!
-✅ Health check: /api/health
-✅ Admin panel: /admin
-✅ Socket.IO: Enabled
+📁 Static Files: Enabled
+🌐 Admin Panel: http://localhost:${PORT}/admin
+🛡️ Security: Enhanced with Helmet & Rate Limiting
 
-✨ Ready for medical consultations!
+✨ Server is running and ready for medical consultations!
   `);
 });
 
@@ -769,9 +981,7 @@ process.on('SIGTERM', () => {
   console.log('🔻 SIGTERM received, shutting down gracefully...');
   server.close(() => {
     console.log('🔻 Process terminated');
-    process.exit(0);
   });
 });
 
 module.exports = app;
-
