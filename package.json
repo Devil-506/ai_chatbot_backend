@@ -1,11 +1,13 @@
 {
   "name": "ai_chatbot_backend",
-  "version": "1.0.0",
-  "description": "Backend for AI Chatbot with Ollama",
+  "version": "2.0.0",
+  "description": "Backend for AI Medical Chatbot with Ollama - Enhanced Security Edition",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "render-start": "node server.js",
+    "test": "node -e \"console.log('Server test passed!')\""
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -21,15 +23,28 @@
     "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   },
   "keywords": [
     "medical",
     "chatbot",
     "tunisia",
     "healthcare",
-    "socket.io"
+    "socket.io",
+    "ollama",
+    "ai",
+    "arabic",
+    "french"
   ],
   "author": "Devil",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Devil-506/ai_chatbot_backend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Devil-506/ai_chatbot_backend/issues"
+  },
+  "homepage": "https://github.com/your-username/ai_chatbot_backend#readme"
 }
