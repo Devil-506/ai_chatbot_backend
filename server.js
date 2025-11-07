@@ -69,7 +69,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Configuration with Render defaults
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-r1:8b';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'render-default-secret-2024';
 
 console.log('🔧 Configuration loaded for Render');
@@ -774,3 +774,4 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
+
