@@ -22,11 +22,13 @@ app.use(helmet({
 const allowedOrigins = [
   "https://ai-chatbot-frontend-1vx1.onrender.com",
   "http://localhost:3000", 
-  "http://localhost:5173"
+  "http://localhost:5173",
+  "https://ai-chatbot-backend-1vx1.onrender.com" // Add your backend URL
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1) {
       const msg = `CORS policy: Origin ${origin} not allowed`;
@@ -56,7 +58,7 @@ const authLimiter = rateLimit({
 });
 
 // Apply rate limiting
-app.use(generalLimiter);
+app.use('/api/', generalLimiter);
 app.use('/api/admin/', authLimiter);
 
 // Security: Body parsing with reasonable limit for Render
@@ -182,8 +184,15 @@ class RemoteOllamaService {
         
         const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
         
+        // Test connection first
+        const isOllamaAvailable = await this.testOllamaConnection();
+        
+        if (!isOllamaAvailable) {
+          throw new Error('Ollama service unavailable');
+        }
+
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000); // Increased timeout for Render
+        const timeout = setTimeout(() => controller.abort(), 120000);
 
         console.log('🔗 Calling Ollama API...');
         const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
@@ -266,13 +275,15 @@ class RemoteOllamaService {
       } catch (error) {
         console.error('❌ Ollama service error:', error);
         
-        const fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة. للطوارئ اتصل على 190.";
+        // Enhanced fallback responses based on error type
+        let fallbackResponse = this.getFallbackResponse(error, userMessage);
         
         if (socket && socket.connected) {
           socket.emit('streaming_response', {
             text: fallbackResponse,
             partial: false,
-            complete: true
+            complete: true,
+            isFallback: true
           });
         }
         
@@ -281,28 +292,69 @@ class RemoteOllamaService {
     });
   }
 
-  async healthCheck() {
+  async testOllamaConnection() {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
+      const timeout = setTimeout(() => controller.abort(), 10000);
       
       const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
         signal: controller.signal
       });
       
       clearTimeout(timeout);
+      return response.ok;
+    } catch (error) {
+      console.error('🔌 Ollama connection test failed:', error.message);
+      return false;
+    }
+  }
+
+  getFallbackResponse(error, userMessage) {
+    const fallbacks = [
+      "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة. للطوارئ اتصل على 190.",
       
-      if (response.ok) {
-        const data = await response.json();
-        return {
-          healthy: true,
-          models: data.models?.map(m => m.name) || [],
-          message: 'Ollama is connected'
-        };
+      "نظام الاستشارات الطبية غير متوفر الآن. نوصي بالاتصال بمستشفى شارل نيكول على 71 286 100 أو مستشفى الرابطة على 71 785 000 لتلقي المساعدة الفورية.",
+      
+      "نعتذر عن عدم تمكننا من تقديم استشارة طبية في الوقت الحالي. للرعاية العاجلة، يرجى التوجه إلى أقرب مركز صحي أو الاتصال برقم الطوارئ 190.",
+      
+      `بناءً على طلبك، نوصي باستشارة طبيب متخصص. يمكنك التواصل مع:
+      - مستشفى شارل نيكول: 71 286 100
+      - مستشفى الرابطة: 71 785 000  
+      - مستشفى المنجي سليم: 71 430 000
+      - رقم الطوارئ: 190`
+    ];
+    
+    // Return a random fallback response
+    return fallbacks[Math.floor(Math.random() * fallbacks.length)];
+  }
+
+  async healthCheck() {
+    try {
+      const isConnected = await this.testOllamaConnection();
+      
+      if (isConnected) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        
+        const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeout);
+        
+        if (response.ok) {
+          const data = await response.json();
+          return {
+            healthy: true,
+            models: data.models?.map(m => m.name) || [],
+            message: 'Ollama is connected and responsive'
+          };
+        }
       }
+      
       return {
         healthy: false,
-        message: `Ollama responded with status: ${response.status}`
+        message: 'Ollama service is unavailable - using fallback mode'
       };
     } catch (error) {
       return {
@@ -568,7 +620,7 @@ function addToHistory(socketId, type, content, timestamp = new Date()) {
   return entry;
 }
 
-// ==================== ROUTES ====================
+// ==================== FIXED ROUTES ====================
 
 // Debug route
 app.get('/debug-static', (req, res) => {
@@ -593,13 +645,13 @@ app.get('/debug-static', (req, res) => {
   });
 });
 
-// Health check endpoint
+// Health check endpoint - FIXED ROUTE
 app.get('/api/health', async (req, res) => {
   try {
     const ollamaHealth = await medicalService.healthCheck();
     
     const healthStatus = {
-      status: 'OK',
+      status: ollamaHealth.healthy ? 'OK' : 'DEGRADED',
       service: 'Tunisian Medical Chatbot - Enhanced Render Edition',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -610,6 +662,32 @@ app.get('/api/health', async (req, res) => {
         users: blockedUsers.size
       },
       ollama: ollamaHealth,
+      environment: process.env.NODE_ENV || 'development',
+      fallbackMode: !ollamaHealth.healthy
+    };
+    
+    res.json(healthStatus);
+  } catch (error) {
+    res.status(500).json({
+      status: 'ERROR',
+      message: 'Health check failed',
+      error: error.message
+    });
+  }
+});
+
+// ADD THIS: Health check at root path for easier testing
+app.get('/health', async (req, res) => {
+  try {
+    const ollamaHealth = await medicalService.healthCheck();
+    
+    const healthStatus = {
+      status: ollamaHealth.healthy ? 'OK' : 'DEGRADED',
+      service: 'Tunisian Medical Chatbot - Health Check',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      connections: activeConnections.size,
+      ollama: ollamaHealth.healthy ? 'Connected' : 'Unavailable',
       environment: process.env.NODE_ENV || 'development'
     };
     
@@ -674,6 +752,75 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// ADD THIS: Chat interface route
+app.get('/chat', (req, res) => {
+  const chatHtmlPath = path.join(__dirname, 'public', 'index.html');
+  
+  if (fs.existsSync(chatHtmlPath)) {
+    res.sendFile(chatHtmlPath);
+  } else {
+    // If file doesn't exist, serve a basic chat interface
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Medical Chatbot - Chat Interface</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 40px; }
+          .chat-container { max-width: 800px; margin: 0 auto; }
+          .message { padding: 10px; margin: 10px 0; border-radius: 5px; }
+          .user { background: #007bff; color: white; text-align: right; }
+          .bot { background: #f8f9fa; border: 1px solid #dee2e6; }
+        </style>
+      </head>
+      <body>
+        <div class="chat-container">
+          <h1>🏥 المساعد الطبي التونسي</h1>
+          <div id="chat"></div>
+          <input type="text" id="messageInput" placeholder="اكتب رسالتك هنا..." style="width: 100%; padding: 10px; margin: 10px 0;">
+          <button onclick="sendMessage()" style="padding: 10px 20px;">إرسال</button>
+        </div>
+        <script src="/socket.io/socket.io.js"></script>
+        <script>
+          const socket = io();
+          socket.on('connect', () => console.log('Connected'));
+          socket.on('chat_message', (data) => addMessage(data.text, false));
+          socket.on('streaming_response', (data) => updateMessage(data.text, false));
+          
+          function addMessage(text, isUser) {
+            const chat = document.getElementById('chat');
+            const msg = document.createElement('div');
+            msg.className = 'message ' + (isUser ? 'user' : 'bot');
+            msg.textContent = text;
+            chat.appendChild(msg);
+          }
+          
+          function updateMessage(text, isUser) {
+            const chat = document.getElementById('chat');
+            const lastMsg = chat.lastChild;
+            if (lastMsg && !lastMsg.classList.contains('user')) {
+              lastMsg.textContent = text;
+            } else {
+              addMessage(text, isUser);
+            }
+          }
+          
+          function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            if (message) {
+              addMessage(message, true);
+              socket.emit('send_message', { message });
+              input.value = '';
+            }
+          }
+        </script>
+      </body>
+      </html>
+    `);
+  }
+});
+
 // Serve admin panel
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
@@ -683,9 +830,9 @@ app.get('/admin.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Root route - redirect to admin
+// Root route - redirect to chat
 app.get('/', (req, res) => {
-  res.redirect('/admin');
+  res.redirect('/chat');
 });
 
 // ==================== SOCKET.IO FOR RENDER ====================
@@ -929,12 +1076,22 @@ io.on('connection', (socket) => {
   }
 });
 
-// 404 handler
+// 404 handler - MUST BE LAST
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     message: 'عذرًا، المسار غير موجود.',
-    requestedUrl: req.originalUrl
+    requestedUrl: req.originalUrl,
+    availableEndpoints: [
+      '/',
+      '/chat', 
+      '/admin',
+      '/health',
+      '/api/health',
+      '/api/test',
+      '/api/admin/stats',
+      '/debug-static'
+    ]
   });
 });
 
@@ -959,8 +1116,14 @@ server.listen(PORT, '0.0.0.0', () => {
 🔒 Admin Secret: ${ADMIN_SECRET}
 
 📁 Static Files: Enabled
-🌐 Admin Panel: http://localhost:${PORT}/admin
-🛡️ Security: Enhanced with Helmet & Rate Limiting
+🌐 Available Routes:
+   - /                 -> Chat interface
+   - /chat             -> Chat interface  
+   - /admin            -> Admin panel
+   - /health           -> Health check
+   - /api/health       -> Detailed health check
+   - /api/test         -> Test endpoint
+   - /debug-static     -> Debug static files
 
 ✨ Server is running and ready for medical consultations!
   `);
