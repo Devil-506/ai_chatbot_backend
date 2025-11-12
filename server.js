@@ -71,10 +71,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'render-default-secret-2024';
+const OLLAMA_API_KEY = process.env.OLLAMA_API_KEY || '';
 
 console.log('🔧 Configuration loaded for Render');
 console.log('🔗 Ollama URL:', OLLAMA_BASE_URL);
 console.log('🤖 Model:', OLLAMA_MODEL);
+console.log('🔑 Ollama API Key:', OLLAMA_API_KEY ? 'Provided' : 'Not provided');
 
 // Security: Socket.IO configuration for Render
 const io = socketIo(server, {
@@ -186,12 +188,21 @@ class RemoteOllamaService {
         const timeout = setTimeout(() => controller.abort(), 90000); // Increased timeout for Render
 
         console.log('🔗 Calling Ollama API...');
+        
+        // Prepare headers
+        const headers = {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        };
+        
+        // Add API key if provided
+        if (OLLAMA_API_KEY) {
+          headers['Authorization'] = `Bearer ${OLLAMA_API_KEY}`;
+        }
+
         const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
           method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-          },
+          headers: headers,
           body: JSON.stringify({
             model: OLLAMA_MODEL,
             prompt: medicalPrompt,
@@ -208,7 +219,16 @@ class RemoteOllamaService {
         clearTimeout(timeout);
 
         if (!response.ok) {
-          throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+          const errorText = await response.text();
+          console.error(`❌ Ollama API error: ${response.status} ${response.statusText}`, errorText);
+          
+          if (response.status === 403) {
+            throw new Error('Ollama access forbidden - check API key or permissions');
+          } else if (response.status === 404) {
+            throw new Error('Ollama model not found - check model name');
+          } else {
+            throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
+          }
         }
 
         const reader = response.body.getReader();
@@ -286,7 +306,14 @@ class RemoteOllamaService {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000); // Increased for Render
       
+      // Prepare headers
+      const headers = {};
+      if (OLLAMA_API_KEY) {
+        headers['Authorization'] = `Bearer ${OLLAMA_API_KEY}`;
+      }
+      
       const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+        headers: headers,
         signal: controller.signal
       });
       
@@ -299,12 +326,29 @@ class RemoteOllamaService {
           models: data.models?.map(m => m.name) || [],
           message: 'Ollama is connected'
         };
+      } else if (response.status === 403) {
+        return {
+          healthy: false,
+          message: 'Ollama access forbidden - check API key or permissions'
+        };
+      } else if (response.status === 404) {
+        return {
+          healthy: false,
+          message: 'Ollama endpoint not found - check URL'
+        };
+      } else {
+        return {
+          healthy: false,
+          message: `Ollama responded with status: ${response.status}`
+        };
       }
-      return {
-        healthy: false,
-        message: `Ollama responded with status: ${response.status}`
-      };
     } catch (error) {
+      if (error.name === 'AbortError') {
+        return {
+          healthy: false,
+          message: 'Ollama connection timeout - server not responding'
+        };
+      }
       return {
         healthy: false,
         message: `Cannot connect to Ollama: ${error.message}`
@@ -495,7 +539,7 @@ app.get('/api/health', async (req, res) => {
     const ollamaHealth = await medicalService.healthCheck();
     
     const healthStatus = {
-      status: 'OK',
+      status: ollamaHealth.healthy ? 'OK' : 'DEGRADED',
       service: 'Tunisian Medical Chatbot - Render',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -510,6 +554,27 @@ app.get('/api/health', async (req, res) => {
       status: 'ERROR',
       message: 'Health check failed',
       error: error.message
+    });
+  }
+});
+
+// Ollama status endpoint
+app.get('/api/ollama-status', async (req, res) => {
+  try {
+    const ollamaHealth = await medicalService.healthCheck();
+    res.json({
+      ollama: ollamaHealth,
+      config: {
+        baseUrl: OLLAMA_BASE_URL,
+        model: OLLAMA_MODEL,
+        hasApiKey: !!OLLAMA_API_KEY
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Ollama status check failed',
+      message: error.message
     });
   }
 });
@@ -555,7 +620,12 @@ app.get('/api/test', (req, res) => {
   res.json({
     message: '🚀 Medical chatbot server is running on Render!',
     timestamp: new Date().toISOString(),
-    version: '2.0.0-render'
+    version: '2.0.0-render',
+    ollama: {
+      url: OLLAMA_BASE_URL,
+      model: OLLAMA_MODEL,
+      status: 'Check /api/health for status'
+    }
   });
 });
 
@@ -571,6 +641,7 @@ app.get('/', (req, res) => {
     status: 'Running on Render',
     endpoints: {
       health: '/api/health',
+      ollama: '/api/ollama-status',
       admin: '/admin',
       test: '/api/test'
     }
@@ -744,9 +815,11 @@ server.listen(PORT, '0.0.0.0', () => {
 🌐 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
+🔑 API Key: ${OLLAMA_API_KEY ? 'Provided' : 'Not provided'}
 
 ✅ Server is running on Render!
 ✅ Health check: /api/health
+✅ Ollama status: /api/ollama-status
 ✅ Admin panel: /admin
 ✅ Socket.IO: Enabled
 
@@ -774,4 +847,3 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
-
