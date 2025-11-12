@@ -27,7 +27,7 @@ app.use(express.json({ limit: '10mb' }));
 // Serve static files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuration
+// Configuration - Updated for Ngrok setup
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 
@@ -35,8 +35,8 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
 
 // Store blocked IPs and users persistently
-const blockedIPs = new Map(); // Map with timestamps and reasons
-const blockedUsers = new Map(); // Map with timestamps and reasons
+const blockedIPs = new Map();
+const blockedUsers = new Map();
 
 // Enhanced Medical Context
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
@@ -74,15 +74,28 @@ class RemoteOllamaService {
     return new Promise(async (resolve, reject) => {
       try {
         console.log('💬 Medical query received:', userMessage.substring(0, 100));
+        console.log('🔗 Connecting to Ollama at:', OLLAMA_BASE_URL);
         
         const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
         
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 60000);
 
+        // Enhanced headers for Ngrok compatibility
+        const headers = {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Medical-Chatbot-Server/1.0',
+          'Accept': 'application/json'
+        };
+
+        // Add Ngrok authentication if available
+        if (process.env.NGROK_AUTH_TOKEN) {
+          headers['Authorization'] = `Bearer ${process.env.NGROK_AUTH_TOKEN}`;
+        }
+
         const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({
             model: OLLAMA_MODEL,
             prompt: medicalPrompt,
@@ -99,7 +112,22 @@ class RemoteOllamaService {
         clearTimeout(timeout);
 
         if (!response.ok) {
-          throw new Error(`Ollama API error: ${response.status}`);
+          let errorDetails = '';
+          try {
+            errorDetails = await response.text();
+          } catch (e) {
+            errorDetails = 'Could not read error response';
+          }
+          
+          console.error(`❌ Ollama API error ${response.status}:`, errorDetails);
+          
+          if (response.status === 403) {
+            throw new Error(`Ngrok/Ollama access forbidden (403). This is usually a Ngrok security restriction. Check your Ngrok configuration.`);
+          } else if (response.status === 404) {
+            throw new Error(`Ollama endpoint not found. Check if Ollama is running and the URL is correct.`);
+          } else {
+            throw new Error(`HTTP ${response.status}: ${errorDetails}`);
+          }
         }
 
         const reader = response.body.getReader();
@@ -141,6 +169,7 @@ class RemoteOllamaService {
                     complete: true
                   });
                 }
+                console.log('✅ Response completed, length:', fullResponse.length);
                 resolve(fullResponse);
                 return;
               }
@@ -156,13 +185,22 @@ class RemoteOllamaService {
       } catch (error) {
         console.error('❌ Ollama service error:', error);
         
-        const fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة.";
+        let fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة.";
+        
+        if (error.name === 'AbortError') {
+          fallbackResponse = "عذرًا، تجاوزت الاستجابة المهلة المسموحة. يرجى المحاولة مرة أخرى.";
+        } else if (error.message.includes('403') || error.message.includes('forbidden')) {
+          fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا بسبب قيود الأمان. يرجى الاتصال بالدعم الفني.";
+        } else if (error.message.includes('404') || error.message.includes('not found')) {
+          fallbackResponse = "عذرًا، خدمة الذكاء الاصطناعي غير متوفرة حاليًا. يرجى الاتصال بالدعم الفني.";
+        }
         
         if (socket && socket.connected) {
           socket.emit('streaming_response', {
             text: fallbackResponse,
             partial: false,
-            complete: true
+            complete: true,
+            error: true
           });
         }
         
@@ -173,10 +211,21 @@ class RemoteOllamaService {
 
   async healthCheck() {
     try {
+      console.log('🔧 Health check connecting to:', OLLAMA_BASE_URL);
+      
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10000);
       
+      const headers = {
+        'User-Agent': 'Medical-Chatbot-Server/1.0'
+      };
+      
+      if (process.env.NGROK_AUTH_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.NGROK_AUTH_TOKEN}`;
+      }
+      
       const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+        headers: headers,
         signal: controller.signal
       });
       
@@ -187,17 +236,29 @@ class RemoteOllamaService {
         return {
           healthy: true,
           models: data.models?.map(m => m.name) || [],
-          message: 'Ollama is connected'
+          message: `Ollama is connected to ${OLLAMA_BASE_URL}`
+        };
+      } else {
+        let errorBody = '';
+        try {
+          errorBody = await response.text();
+        } catch (e) {
+          errorBody = 'Could not read error response';
+        }
+        
+        return {
+          healthy: false,
+          message: `Ollama responded with status: ${response.status} - ${response.statusText}`,
+          details: errorBody,
+          url: OLLAMA_BASE_URL
         };
       }
-      return {
-        healthy: false,
-        message: `Ollama responded with status: ${response.status}`
-      };
     } catch (error) {
       return {
         healthy: false,
-        message: `Cannot connect to Ollama: ${error.message}`
+        message: `Cannot connect to Ollama at ${OLLAMA_BASE_URL}: ${error.message}`,
+        errorType: error.name,
+        url: OLLAMA_BASE_URL
       };
     }
   }
@@ -458,27 +519,58 @@ function addToHistory(socketId, type, content, timestamp = new Date()) {
   return entry;
 }
 
-// Debug route
-app.get('/debug-static', (req, res) => {
-  const publicPath = path.join(__dirname, 'public');
-  let files = [];
-  
+// Enhanced Ngrok Debug Endpoint
+app.get('/api/debug-ngrok', async (req, res) => {
   try {
-    if (fs.existsSync(publicPath)) {
-      files = fs.readdirSync(publicPath);
+    console.log('🔧 Testing Ngrok connection to:', OLLAMA_BASE_URL);
+    
+    const headers = {
+      'User-Agent': 'Medical-Chatbot-Server/1.0'
+    };
+    
+    if (process.env.NGROK_AUTH_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.NGROK_AUTH_TOKEN}`;
     }
+    
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+      headers: headers,
+      timeout: 10000
+    });
+    
+    let responseBody = '';
+    try {
+      responseBody = await response.text();
+    } catch (e) {
+      responseBody = 'Could not read response body';
+    }
+    
+    res.json({
+      status: response.status,
+      statusText: response.statusText,
+      url: OLLAMA_BASE_URL,
+      ngrokUrl: OLLAMA_BASE_URL,
+      headers: response.headers,
+      body: responseBody,
+      environment: {
+        OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+        OLLAMA_MODEL: process.env.OLLAMA_MODEL,
+        NGROK_AUTH_TOKEN: process.env.NGROK_AUTH_TOKEN ? '***' : 'Not set'
+      }
+    });
+    
   } catch (error) {
-    console.error('Error reading public directory:', error);
+    console.error('🔧 Debug Ngrok error:', error);
+    res.status(500).json({
+      error: error.message,
+      url: OLLAMA_BASE_URL,
+      stack: error.stack,
+      environment: {
+        OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+        OLLAMA_MODEL: process.env.OLLAMA_MODEL,
+        NGROK_AUTH_TOKEN: process.env.NGROK_AUTH_TOKEN ? '***' : 'Not set'
+      }
+    });
   }
-  
-  res.json({
-    message: 'Static files debug information',
-    publicPath: publicPath,
-    publicExists: fs.existsSync(publicPath),
-    files: files,
-    adminHtmlExists: fs.existsSync(path.join(publicPath, 'admin.html')),
-    currentDir: __dirname
-  });
 });
 
 // Health check endpoint
@@ -487,17 +579,17 @@ app.get('/api/health', async (req, res) => {
     const ollamaHealth = await medicalService.healthCheck();
     
     const healthStatus = {
-      status: 'OK',
-      service: 'Tunisian Medical Chatbot',
+      status: ollamaHealth.healthy ? 'OK' : 'ERROR',
+      service: 'Tunisian Medical Chatbot - Render',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      memory: process.memoryUsage(),
       connections: activeConnections.size,
-      blocked: {
-        ips: blockedIPs.size,
-        users: blockedUsers.size
-      },
-      ollama: ollamaHealth
+      ollama: ollamaHealth,
+      environment: process.env.NODE_ENV || 'development',
+      ngrok: {
+        url: OLLAMA_BASE_URL,
+        hasAuthToken: !!process.env.NGROK_AUTH_TOKEN
+      }
     };
     
     res.json(healthStatus);
@@ -505,7 +597,8 @@ app.get('/api/health', async (req, res) => {
     res.status(500).json({
       status: 'ERROR',
       message: 'Health check failed',
-      error: error.message
+      error: error.message,
+      url: OLLAMA_BASE_URL
     });
   }
 });
@@ -557,7 +650,8 @@ app.get('/api/test', (req, res) => {
   res.json({
     message: 'Medical chatbot server is running!',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: '1.0.0',
+    ollamaUrl: OLLAMA_BASE_URL
   });
 });
 
@@ -814,9 +908,11 @@ server.listen(PORT, '0.0.0.0', () => {
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
 🔒 Admin Secret: ${ADMIN_SECRET}
+📡 Ngrok Auth: ${process.env.NGROK_AUTH_TOKEN ? 'Configured' : 'Not set'}
 
 📁 Static Files: Enabled
 🌐 Admin Panel: http://localhost:${PORT}/admin
+🔧 Debug Endpoint: http://localhost:${PORT}/api/debug-ngrok
 
 ✨ Server is running and ready!
   `);
