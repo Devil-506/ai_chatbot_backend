@@ -3,292 +3,169 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const fs = require('fs');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const fs = require('fs'); // Add this for file system operations
 
 const app = express();
 const server = http.createServer(app);
 
-// ==================== SECURITY & RENDER COMPATIBILITY ====================
-
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
-}));
-
-const allowedOrigins = [
-  "https://ai-chatbot-frontend-1vx1.onrender.com",
-  "http://localhost:3000", 
-  "http://localhost:5173"
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      console.warn('🚫 CORS violation attempt from:', origin);
-      return callback(new Error('CORS policy violation'), false);
-    }
-    return callback(null, true);
-  },
-  credentials: true
-}));
-
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 200,
-  message: 'Too many requests from this IP, please try again later.',
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use('/api/', generalLimiter);
-
-app.use(express.json({ limit: '50kb' }));
-app.use(express.urlencoded({ extended: true, limit: '50kb' }));
-
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Socket.IO configuration
+// Configure CORS for your Render frontend
 const io = socketIo(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: [
+      "https://ai-chatbot-frontend-1vx1.onrender.com",  // Your actual frontend URL
+      "http://localhost:3000",
+      "http://localhost:5173"
+    ],
     methods: ["GET", "POST"],
     credentials: true
-  },
-  transports: ['websocket', 'polling']
+  }
 });
 
-// ==================== CONFIGURATION ====================
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
 
+// Serve static files from 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Configuration - Update these with your ngrok URL
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-r1:8b';
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'render-default-secret-2024';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
 
-console.log('🔧 Server Configuration:');
-console.log('🔗 Ollama URL:', OLLAMA_BASE_URL);
-console.log('🤖 Model:', OLLAMA_MODEL);
+// Simple Admin Configuration
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
 
-// ==================== MEDICAL RESPONSE SYSTEM ====================
+// Enhanced Medical Context for Tunisian Patients
+const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
-const MEDICAL_RESPONSES = {
-  general: [
-    "أهلاً بك! أنا مساعدك الطبي التونسي. كيف يمكنني مساعدتك اليوم؟",
-    "مرحباً! أنا هنا لتقديم معلومات طبية عامة ونصائح صحية.",
-    "أهلاً وسهلاً! يسرني مساعدتك في استفساراتك الطبية."
-  ],
-  
-  symptoms: [
-    "بناءً على الأعراض التي ذكرتها، أنصحك باستشارة طبيب مختص للتشخيص الدقيق.",
-    "هذه الأعراض تتطلب تقييم طبي. يرجى التوجه إلى أقرب مركز صحي.",
-    "للحصول على تشخيص دقيق، أنصح بمراجعة طبيب للفحص السريري."
-  ],
-  
-  emergency: [
-    "⛑️ هذه حالة طارئة! يرجى الاتصال فوراً برقم الطوارئ 190 أو التوجه إلى أقرب مستشفى.",
-    "🚨 هذه حالة تستدعي عناية عاجلة. اتصل بالطوارئ على 190 أو اذهب إلى المستشفى الآن.",
-    "⚠️ للحالات الطارئة: اتصل بـ 190 أو اذهب إلى مستشفى شارل نيكول (71 286 100)"
-  ],
-  
-  hospitals: [
-    "🏥 مستشفيات تونس الرئيسية:\n- شارل نيكول: 71 286 100\n- الرابطة: 71 785 000\n- المنجي سليم: 71 430 000\n- الطوارئ: 190",
-    "📞 جهات اتصال طبية:\n- الإسعاف: 190\n- مستشفى شارل نيكول: 71 286 100\n- مستشفى الرابطة: 71 785 000",
-    "🔔 للرعاية الطبية العاجلة:\n- رقم الطوارئ: 190\n- مستشفى شارل نيكول: 71 286 100\n- مستشفى الرابطة: 71 785 000"
-  ],
-  
-  fallback: [
-    "عذراً، الخدمة الطبية غير متاحة حالياً. يرجى الاتصال بطبيبك مباشرة أو التوجه إلى مركز صحي.",
-    "نظام الاستشارات غير متوفر الآن. للرعاية العاجلة اتصل بالطوارئ على 190.",
-    "نعتذر عن عدم تمكننا من تقديم استشارة طبية في الوقت الحالي. يرجى التواصل مع طبيب مختص."
-  ]
-};
+1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
+2. تقديم نصائح صحية ومعلومات وقائية
+3. مساعدة المرضى على فهم الحالات الطبية
+4. توجيه المرضى للموارد الصحية في تونس
 
-class MedicalResponseService {
+**تحذيرات مهمة:**
+- أنت لست بديلاً عن الطبيب
+- استشر المتخصصين للحالات الخطيرة
+-للطوارئ اتقل على 190
+- تقدم معلومات فقط و تشخيصات
+
+**معلومات عن تونس:**
+- نظام الصحة: عمومي وخاص
+- رقم الطوارئ: 190
+- مستشفيات رئيسية: شارل نيكول، الرابطة، المنجي سليم
+
+**عند الرد:**
+- استخدم اللغة المستعملة عند السؤال 
+- كن واضحًا ومتعاطفًا
+- ركز على سلامة المريض
+- لا تطلب معلومات شخصية
+- لا تعطي وصفات طبية
+- شجع على استشارة الطبيب
+- استخدم لغة بسيطة
+- استعمل اللغة الفرنسية كاللغة الافتراضية 
+
+الآن جاوب على سؤال المريض:`;
+
+class RemoteOllamaService {
   async generateResponse(userMessage, socket) {
     return new Promise(async (resolve, reject) => {
       try {
         console.log('💬 Medical query received:', userMessage.substring(0, 100));
         
-        // Try Ollama service first
-        const ollamaResponse = await this.tryOllamaService(userMessage, socket);
-        if (ollamaResponse) {
-          resolve(ollamaResponse);
-          return;
+        const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
+        
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 60000); // 1 minute timeout
+
+        const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: OLLAMA_MODEL,
+            prompt: medicalPrompt,
+            stream: true,
+            options: {
+              temperature: 0.7,
+              top_p: 0.9,
+              top_k: 40
+            }
+          }),
+          signal: controller.signal
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          throw new Error(`Ollama API error: ${response.status}`);
         }
-        
-        // If Ollama fails, use local medical responses
-        const localResponse = this.generateLocalResponse(userMessage);
-        
-        if (socket && socket.connected) {
-          // Simulate streaming for consistent UX
-          this.simulateStreaming(localResponse, socket);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = '';
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.trim() === '') continue;
+            
+            try {
+              const data = JSON.parse(line);
+              
+              if (data.response) {
+                fullResponse += data.response;
+                
+                // Stream to frontend
+                if (socket && socket.connected) {
+                  socket.emit('streaming_response', {
+                    text: fullResponse,
+                    partial: !data.done
+                  });
+                }
+              }
+              
+              if (data.done) {
+                if (socket && socket.connected) {
+                  socket.emit('streaming_response', {
+                    text: fullResponse,
+                    partial: false,
+                    complete: true
+                  });
+                }
+                resolve(fullResponse);
+                return;
+              }
+              
+            } catch (e) {
+              console.warn('⚠️ JSON parse error:', e.message);
+            }
+          }
         }
-        
-        resolve(localResponse);
+
+        resolve(fullResponse);
         
       } catch (error) {
-        console.error('❌ Medical service error:', error);
-        const fallback = this.getFallbackResponse();
+        console.error('❌ Ollama service error:', error);
+        
+        const fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة.";
         
         if (socket && socket.connected) {
           socket.emit('streaming_response', {
-            text: fallback,
+            text: fallbackResponse,
             partial: false,
-            complete: true,
-            isFallback: true
+            complete: true
           });
         }
         
-        resolve(fallback);
+        resolve(fallbackResponse);
       }
     });
-  }
-
-  async tryOllamaService(userMessage, socket) {
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
-
-      const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({
-          model: OLLAMA_MODEL,
-          prompt: userMessage,
-          stream: true,
-          options: {
-            temperature: 0.7,
-            top_p: 0.9
-          }
-        }),
-        signal: controller.signal
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`Ollama API error: ${response.status}`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let fullResponse = '';
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.trim() === '') continue;
-          
-          try {
-            const data = JSON.parse(line);
-            
-            if (data.response) {
-              fullResponse += data.response;
-              
-              if (socket && socket.connected) {
-                socket.emit('streaming_response', {
-                  text: fullResponse,
-                  partial: !data.done
-                });
-              }
-            }
-            
-            if (data.done) {
-              if (socket && socket.connected) {
-                socket.emit('streaming_response', {
-                  text: fullResponse,
-                  partial: false,
-                  complete: true
-                });
-              }
-              return fullResponse;
-            }
-            
-          } catch (e) {
-            console.warn('⚠️ JSON parse error:', e.message);
-          }
-        }
-      }
-
-      return fullResponse;
-      
-    } catch (error) {
-      console.log('🔌 Ollama service unavailable, using local responses');
-      return null;
-    }
-  }
-
-  generateLocalResponse(userMessage) {
-    const message = userMessage.toLowerCase();
-    
-    // Emergency keywords
-    const emergencyWords = ['طارئ', 'طارئة', 'اسعاف', 'نزيف', 'قلب', 'تنفس', 'فقدان', 'إغماء', 'حروق', 'حادث'];
-    if (emergencyWords.some(word => message.includes(word))) {
-      return this.getRandomResponse('emergency');
-    }
-    
-    // Hospital keywords
-    const hospitalWords = ['مستشفى', 'مستوصف', 'عيادة', 'دكتور', 'طبيب', 'جراحة', 'عمليه', 'عملية'];
-    if (hospitalWords.some(word => message.includes(word))) {
-      return this.getRandomResponse('hospitals');
-    }
-    
-    // Symptom keywords
-    const symptomWords = ['ألم', 'صداع', 'حمى', 'سخونة', 'برد', 'سعال', 'كحة', 'غثيان', 'تقيؤ', 'إسهال', 'إمساك'];
-    if (symptomWords.some(word => message.includes(word))) {
-      return this.getRandomResponse('symptoms');
-    }
-    
-    // General response
-    return this.getRandomResponse('general');
-  }
-
-  getRandomResponse(type) {
-    const responses = MEDICAL_RESPONSES[type] || MEDICAL_RESPONSES.fallback;
-    return responses[Math.floor(Math.random() * responses.length)];
-  }
-
-  getFallbackResponse() {
-    return this.getRandomResponse('fallback');
-  }
-
-  simulateStreaming(response, socket) {
-    // Simulate typing effect
-    let displayedText = '';
-    const words = response.split(' ');
-    let index = 0;
-    
-    const interval = setInterval(() => {
-      if (index < words.length) {
-        displayedText += words[index] + ' ';
-        socket.emit('streaming_response', {
-          text: displayedText,
-          partial: true
-        });
-        index++;
-      } else {
-        clearInterval(interval);
-        socket.emit('streaming_response', {
-          text: response,
-          partial: false,
-          complete: true,
-          isLocal: true
-        });
-      }
-    }, 100);
   }
 
   async healthCheck() {
@@ -303,54 +180,157 @@ class MedicalResponseService {
       clearTimeout(timeout);
       
       if (response.ok) {
+        const data = await response.json();
         return {
           healthy: true,
-          message: 'Ollama service is connected'
+          models: data.models?.map(m => m.name) || [],
+          message: 'Ollama is connected'
         };
       }
       return {
         healthy: false,
-        message: 'Ollama service responded with error'
+        message: `Ollama responded with status: ${response.status}`
       };
     } catch (error) {
       return {
         healthy: false,
-        message: 'Ollama service unavailable - using local medical responses'
+        message: `Cannot connect to Ollama: ${error.message}`
       };
     }
   }
 }
 
-const medicalService = new MedicalResponseService();
+const medicalService = new RemoteOllamaService();
 
-// ==================== SERVER STATE MANAGEMENT ====================
-
+// Store active connections
 const activeConnections = new Map();
-const blockedIPs = new Map();
-const blockedUsers = new Map();
-const chatHistory = [];
-const MAX_HISTORY_SIZE = 500;
 
-function addToHistory(socketId, type, content) {
+// Store chat history for admin monitoring
+const chatHistory = [];
+const MAX_HISTORY_SIZE = 1000;
+
+// Simple Admin Controls
+const adminControls = {
+  getConnectedUsers() {
+    return Array.from(activeConnections.entries()).map(([id, info]) => ({
+      socketId: id,
+      ...info,
+      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's'
+    }));
+  },
+
+  kickUser(socketId) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (socket) {
+      socket.emit('admin_message', {
+        type: 'warning',
+        message: 'تم فصل اتصالك من قبل المسؤول'
+      });
+      socket.disconnect(true);
+      console.log(`🔴 Admin kicked user: ${socketId}`);
+      return true;
+    }
+    return false;
+  },
+
+  blockUser(socketId) {
+    // Simple blocking - just kick and prevent immediate reconnection
+    // In production, you'd want a proper blocking mechanism
+    return this.kickUser(socketId);
+  },
+
+  broadcastToAll(message) {
+    io.emit('admin_announcement', {
+      message: message,
+      timestamp: new Date().toISOString(),
+      from: 'System Admin'
+    });
+    console.log(`📢 Admin broadcast: ${message}`);
+    return activeConnections.size;
+  },
+
+  getServerStats() {
+    return {
+      totalConnections: activeConnections.size,
+      chatHistorySize: chatHistory.length,
+      serverUptime: process.uptime(),
+      memoryUsage: process.memoryUsage(),
+      timestamp: new Date().toISOString()
+    };
+  }
+};
+
+// Function to add message to history
+function addToHistory(socketId, type, content, timestamp = new Date()) {
   const entry = {
-    id: `${socketId}-${Date.now()}`,
+    id: `${socketId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     socketId,
-    type,
+    type, // 'user_message', 'bot_response', 'user_connected', 'user_disconnected'
     content,
-    timestamp: new Date().toISOString(),
-    timestampReadable: new Date().toLocaleString()
+    timestamp: timestamp.toISOString(),
+    timestampReadable: timestamp.toLocaleString('en-US', { 
+      timeZone: 'Africa/Tunis',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
   };
   
   chatHistory.push(entry);
   
+  // Keep history size manageable
   if (chatHistory.length > MAX_HISTORY_SIZE) {
-    chatHistory.shift();
+    chatHistory.splice(0, chatHistory.length - MAX_HISTORY_SIZE);
   }
   
   return entry;
 }
 
-// ==================== ROUTES ====================
+// ==================== DEBUG ROUTES ====================
+
+// Debug route to check if static files are working
+app.get('/debug-static', (req, res) => {
+  const publicPath = path.join(__dirname, 'public');
+  let files = [];
+  
+  try {
+    if (fs.existsSync(publicPath)) {
+      files = fs.readdirSync(publicPath);
+    }
+  } catch (error) {
+    console.error('Error reading public directory:', error);
+  }
+  
+  res.json({
+    message: 'Static files debug information',
+    publicPath: publicPath,
+    publicExists: fs.existsSync(publicPath),
+    files: files,
+    adminHtmlExists: fs.existsSync(path.join(publicPath, 'admin.html')),
+    currentDir: __dirname
+  });
+});
+
+// Direct admin route
+app.get('/admin-test', (req, res) => {
+  const adminPath = path.join(__dirname, 'public', 'admin.html');
+  console.log('📁 Attempting to serve admin from:', adminPath);
+  
+  if (fs.existsSync(adminPath)) {
+    res.sendFile(adminPath);
+  } else {
+    res.status(404).json({
+      error: 'Admin file not found',
+      path: adminPath,
+      currentFiles: fs.readdirSync(__dirname)
+    });
+  }
+});
+
+// ==================== MAIN ROUTES ====================
 
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
@@ -362,15 +342,9 @@ app.get('/api/health', async (req, res) => {
       service: 'Tunisian Medical Chatbot',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
+      memory: process.memoryUsage(),
       connections: activeConnections.size,
-      ollama: ollamaHealth,
-      environment: process.env.NODE_ENV || 'development',
-      features: {
-        chat: true,
-        admin: true,
-        streaming: true,
-        localResponses: true
-      }
+      ollama: ollamaHealth
     };
     
     res.json(healthStatus);
@@ -383,106 +357,19 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Simple health check
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'OK',
-    service: 'Medical Chatbot',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    connections: activeConnections.size
-  });
+// Simple admin stats endpoint (no auth for local use)
+app.get('/api/admin/stats', (req, res) => {
+  const stats = adminControls.getServerStats();
+  res.json(stats);
 });
 
-// Test endpoint
+// Simple test endpoint
 app.get('/api/test', (req, res) => {
   res.json({
-    message: '🚀 Medical chatbot server is running!',
+    message: 'Medical chatbot server is running!',
     timestamp: new Date().toISOString(),
-    version: '2.0.0'
+    version: '1.0.0'
   });
-});
-
-// Serve chat interface
-app.get('/chat', (req, res) => {
-  const chatPath = path.join(__dirname, 'public', 'index.html');
-  if (fs.existsSync(chatPath)) {
-    res.sendFile(chatPath);
-  } else {
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Medical Chatbot</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-          .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; }
-          .chat-container { height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 20px; margin: 20px 0; }
-          .message { margin: 10px 0; padding: 10px; border-radius: 5px; }
-          .user { background: #007bff; color: white; text-align: right; }
-          .bot { background: #f8f9fa; border: 1px solid #dee2e6; }
-          input { width: 100%; padding: 10px; margin: 10px 0; }
-          button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <h1>🏥 المساعد الطبي التونسي</h1>
-          <div class="chat-container" id="chat"></div>
-          <input type="text" id="messageInput" placeholder="اكتب سؤالك الطبي هنا...">
-          <button onclick="sendMessage()">إرسال</button>
-        </div>
-        <script src="/socket.io/socket.io.js"></script>
-        <script>
-          const socket = io();
-          socket.on('connect', () => console.log('Connected'));
-          socket.on('chat_message', (data) => addMessage(data.text, false));
-          socket.on('streaming_response', (data) => {
-            if (data.partial) {
-              updateMessage(data.text, false);
-            } else {
-              updateMessage(data.text, false);
-            }
-          });
-          
-          function addMessage(text, isUser) {
-            const chat = document.getElementById('chat');
-            const msg = document.createElement('div');
-            msg.className = 'message ' + (isUser ? 'user' : 'bot');
-            msg.textContent = text;
-            chat.appendChild(msg);
-            chat.scrollTop = chat.scrollHeight;
-          }
-          
-          function updateMessage(text, isUser) {
-            const chat = document.getElementById('chat');
-            const lastMsg = chat.lastChild;
-            if (lastMsg && !lastMsg.classList.contains('user')) {
-              lastMsg.textContent = text;
-            } else {
-              addMessage(text, isUser);
-            }
-            chat.scrollTop = chat.scrollHeight;
-          }
-          
-          function sendMessage() {
-            const input = document.getElementById('messageInput');
-            const message = input.value.trim();
-            if (message) {
-              addMessage(message, true);
-              socket.emit('send_message', { message });
-              input.value = '';
-            }
-          }
-          
-          document.getElementById('messageInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') sendMessage();
-          });
-        </script>
-      </body>
-      </html>
-    `);
-  }
 });
 
 // Serve admin panel
@@ -490,24 +377,30 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.redirect('/chat');
+// Serve admin panel directly
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// ==================== SOCKET.IO HANDLING ====================
+// Root route - redirect to admin
+app.get('/', (req, res) => {
+  res.redirect('/admin');
+});
 
+// Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
   
   const userInfo = {
     connectedAt: new Date(),
-    ip: socket.handshake.headers['x-forwarded-for'] || socket.handshake.address,
+    ip: socket.handshake.address,
     userAgent: socket.handshake.headers['user-agent']
   };
   
   activeConnections.set(socket.id, userInfo);
-  addToHistory(socket.id, 'user_connected', `User connected`);
+  
+  // Add to chat history
+  addToHistory(socket.id, 'user_connected', `User connected from ${userInfo.ip}`);
 
   // Send welcome message
   socket.emit('welcome', {
@@ -523,19 +416,17 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (data.message.length > 2000) {
+      socket.emit('error', { message: 'الرسالة طويلة جدًا. الرجاء الاختصار.' });
+      return;
+    }
+
     try {
       console.log(`📝 Processing message from ${socket.id}`);
       
-      // Add user message to chat
-      socket.emit('chat_message', {
-        text: data.message,
-        isUser: true,
-        timestamp: new Date().toISOString()
-      });
-      
+      // Add user message to history
       addToHistory(socket.id, 'user_message', data.message.trim());
       
-      // Get response
       await medicalService.generateResponse(data.message.trim(), socket);
     } catch (error) {
       console.error('💥 Message processing error:', error);
@@ -548,44 +439,101 @@ io.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log('🔌 User disconnected:', socket.id, 'Reason:', reason);
+    
+    // Add to chat history
+    addToHistory(socket.id, 'user_disconnected', `User disconnected: ${reason}`);
+    
     activeConnections.delete(socket.id);
-    addToHistory(socket.id, 'user_disconnected', `User disconnected`);
   });
 
-  // Admin authentication
-  if (socket.handshake.auth && socket.handshake.auth.secret === ADMIN_SECRET) {
-    console.log('🔓 Admin connected:', socket.id);
-    
-    userInfo.isAdmin = true;
-    activeConnections.set(socket.id, userInfo);
+  // Handle errors
+  socket.on('error', (error) => {
+    console.error('💥 Socket error:', error);
+  });
 
+  // ==================== SIMPLE REAL-TIME ADMIN ====================
+  
+  // ADMIN SECRET CONNECTION - Simple and effective for local server
+  if (socket.handshake.auth.secret === ADMIN_SECRET) {
+    console.log('🔓 Admin connected via WebSocket:', socket.id);
+    
     socket.emit('admin_welcome', { 
       message: '🔓 أنت متصل كمسؤول',
-      users: Array.from(activeConnections.entries()).map(([id, info]) => ({
-        socketId: id,
-        ...info,
-        connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's'
-      })),
-      stats: {
-        totalConnections: activeConnections.size,
-        chatHistorySize: chatHistory.length,
-        serverUptime: process.uptime(),
-        timestamp: new Date().toISOString()
-      }
+      users: adminControls.getConnectedUsers(),
+      stats: adminControls.getServerStats()
+    });
+
+    // Send real-time updates to admin
+    socket.on('admin_kick_user', (data) => {
+      const success = adminControls.kickUser(data.socketId);
+      socket.emit('admin_action_result', {
+        action: 'kick_user',
+        success: success,
+        message: success ? `تم فصل المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_block_user', (data) => {
+      const success = adminControls.blockUser(data.socketId);
+      socket.emit('admin_action_result', {
+        action: 'block_user',
+        success: success,
+        message: success ? `تم حظر المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
+      });
+    });
+
+    socket.on('admin_broadcast', (data) => {
+      const recipients = adminControls.broadcastToAll(data.message);
+      socket.emit('admin_action_result', {
+        action: 'broadcast',
+        success: true,
+        message: `تم إرسال الإشعار إلى ${recipients} مستخدم`
+      });
+    });
+
+    socket.on('admin_get_stats', () => {
+      socket.emit('admin_stats', adminControls.getServerStats());
+    });
+
+    socket.on('admin_get_history', () => {
+      socket.emit('admin_chat_history', chatHistory.slice(-50));
+    });
+
+    // Send user updates to admin in real-time every 3 seconds
+    const adminUpdateInterval = setInterval(() => {
+      socket.emit('admin_users_update', {
+        users: adminControls.getConnectedUsers(),
+        stats: adminControls.getServerStats()
+      });
+    }, 3000);
+
+    // Clear interval when admin disconnects
+    socket.on('disconnect', () => {
+      clearInterval(adminUpdateInterval);
+      console.log('🔒 Admin disconnected:', socket.id);
     });
   }
 });
 
-// 404 handler
+// 404 handler - MUST BE LAST
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     message: 'عذرًا، المسار غير موجود.',
-    availableEndpoints: ['/', '/chat', '/admin', '/health', '/api/health', '/api/test']
+    requestedUrl: req.originalUrl,
+    availableRoutes: [
+      '/api/health',
+      '/api/admin/stats', 
+      '/api/test',
+      '/admin',
+      '/admin.html',
+      '/admin-test',
+      '/debug-static'
+    ]
   });
 });
 
-// Error handling
+// Error handling middleware
 app.use((error, req, res, next) => {
   console.error('🔥 Server error:', error);
   res.status(500).json({
@@ -594,25 +542,44 @@ app.use((error, req, res, next) => {
   });
 });
 
-// ==================== SERVER STARTUP ====================
-
 const PORT = process.env.PORT || 10000;
+
+// Check if public folder and admin.html exist on startup
+const publicPath = path.join(__dirname, 'public');
+const adminHtmlPath = path.join(publicPath, 'admin.html');
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
 🏥 Tunisian Medical Chatbot Server
 📍 Port: ${PORT}
-🌐 Environment: ${process.env.NODE_ENV || 'development'}
+🎯 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
+🔒 Admin Secret: ${ADMIN_SECRET}
 
-✅ Server is running!
-✅ Health check: /health
-✅ Chat interface: /chat  
-✅ Admin panel: /admin
+📁 Static Files Status:
+   Public folder: ${fs.existsSync(publicPath) ? '✅ EXISTS' : '❌ MISSING'}
+   admin.html: ${fs.existsSync(adminHtmlPath) ? '✅ EXISTS' : '❌ MISSING'}
 
-✨ Ready to serve medical consultations!
+🌐 Available Admin URLs:
+   http://localhost:${PORT}/admin
+   http://localhost:${PORT}/admin.html  
+   http://localhost:${PORT}/admin-test
+
+🔧 Debug URLs:
+   http://localhost:${PORT}/debug-static
+   http://localhost:${PORT}/api/health
+
+✨ Server is running and ready!
   `);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('🔻 SIGTERM received, shutting down gracefully...');
+  server.close(() => {
+    console.log('🔻 Process terminated');
+  });
 });
 
 module.exports = app;
