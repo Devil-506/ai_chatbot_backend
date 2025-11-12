@@ -3,38 +3,147 @@ const cors = require('cors');
 const http = require('http');
 const socketIo = require('socket.io');
 const path = require('path');
-const fs = require('fs'); // Add this for file system operations
+const fs = require('fs');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for your Render frontend
-const io = socketIo(server, {
-  cors: {
-    origin: [
-      "https://ai-chatbot-frontend-1vx1.onrender.com",  // Your actual frontend URL
-      "http://localhost:3000",
-      "http://localhost:5173"
-    ],
-    methods: ["GET", "POST"],
-    credentials: true
-  }
+// ==================== RENDER FIXES ====================
+
+// Security: Helmet with Render-compatible CSP
+app.use(helmet({
+  contentSecurityPolicy: false, // Disable CSP for Render compatibility
+  crossOriginEmbedderPolicy: false
+}));
+
+// Security: CORS for Render
+const allowedOrigins = [
+  "https://ai-chatbot-frontend-1vx1.onrender.com",
+  "http://localhost:3000", 
+  "http://localhost:5173"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = `CORS policy: Origin ${origin} not allowed`;
+      console.warn('🚫 CORS violation attempt from:', origin);
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true
+}));
+
+// Security: Rate limiting (Render-compatible)
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200, // Increased for Render
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // Increased for Render
+  message: 'Too many authentication attempts, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply rate limiting
+app.use(generalLimiter);
+app.use('/api/admin/', authLimiter);
+
+// Security: Body parsing with reasonable limit for Render
+app.use(express.json({ limit: '50kb' })); // Increased for medical queries
 
 // Serve static files from 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Configuration - Update these with your ngrok URL
+// Configuration with Render defaults
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'deepseek-v3.1:671b-cloud';
+const ADMIN_SECRET = process.env.ADMIN_SECRET || 'render-default-secret-2024';
 
-// Simple Admin Configuration
-const ADMIN_SECRET = process.env.ADMIN_SECRET || 'iamtheserver2024';
+console.log('🔧 Configuration loaded for Render');
+console.log('🔗 Ollama URL:', OLLAMA_BASE_URL);
+console.log('🤖 Model:', OLLAMA_MODEL);
 
-// Enhanced Medical Context for Tunisian Patients
+// Security: Socket.IO configuration for Render
+const io = socketIo(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'] // Added for Render compatibility
+});
+
+// Store blocked IPs and users
+const blockedIPs = new Map();
+const blockedUsers = new Map();
+
+// Security: Rate limiting for socket messages
+const socketRateLimits = new Map();
+const SOCKET_RATE_LIMIT = {
+  windowMs: 60000,
+  maxMessages: 15, // Increased for Render
+  maxConnections: 5 // Increased for Render
+};
+
+const checkSocketRateLimit = (socket) => {
+  const ip = socket.handshake.address;
+  const now = Date.now();
+  
+  if (!socketRateLimits.has(ip)) {
+    socketRateLimits.set(ip, {
+      messageCount: 0,
+      connectionCount: 1,
+      lastReset: now,
+      sockets: new Set([socket.id])
+    });
+    return true;
+  }
+
+  const limit = socketRateLimits.get(ip);
+  
+  // Reset counter if window has passed
+  if (now - limit.lastReset > SOCKET_RATE_LIMIT.windowMs) {
+    limit.messageCount = 0;
+    limit.lastReset = now;
+  }
+  
+  // Track socket connections
+  if (!limit.sockets.has(socket.id)) {
+    limit.sockets.add(socket.id);
+    limit.connectionCount++;
+  }
+
+  // Check connection limit
+  if (limit.connectionCount > SOCKET_RATE_LIMIT.maxConnections) {
+    console.warn(`🚫 IP ${ip} exceeded connection limit`);
+    return false;
+  }
+  
+  // Check message limit
+  if (limit.messageCount >= SOCKET_RATE_LIMIT.maxMessages) {
+    console.warn(`🚫 IP ${ip} exceeded message rate limit`);
+    return false;
+  }
+  
+  limit.messageCount++;
+  return true;
+};
+
+// ==================== ORIGINAL MEDICAL CONTEXT ====================
+
 const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التونسيين. دورك هو:
 
 1. تقديم معلومات طبية عامة وتحليل أولي للأعراض
@@ -45,7 +154,7 @@ const MEDICAL_CONTEXT = `أنت مساعد طبي مخصص للمرضى التو
 **تحذيرات مهمة:**
 - أنت لست بديلاً عن الطبيب
 - استشر المتخصصين للحالات الخطيرة
--للطوارئ اتقل على 190
+-للطوارئ اتصل على 190
 - تقدم معلومات فقط و تشخيصات
 
 **معلومات عن تونس:**
@@ -74,11 +183,15 @@ class RemoteOllamaService {
         const medicalPrompt = MEDICAL_CONTEXT + "\n\nالمريض: " + userMessage + "\n\nالمساعد:";
         
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 60000); // 1 minute timeout
+        const timeout = setTimeout(() => controller.abort(), 90000); // Increased timeout for Render
 
+        console.log('🔗 Calling Ollama API...');
         const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
           body: JSON.stringify({
             model: OLLAMA_MODEL,
             prompt: medicalPrompt,
@@ -95,7 +208,7 @@ class RemoteOllamaService {
         clearTimeout(timeout);
 
         if (!response.ok) {
-          throw new Error(`Ollama API error: ${response.status}`);
+          throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
         }
 
         const reader = response.body.getReader();
@@ -121,7 +234,6 @@ class RemoteOllamaService {
               if (data.response) {
                 fullResponse += data.response;
                 
-                // Stream to frontend
                 if (socket && socket.connected) {
                   socket.emit('streaming_response', {
                     text: fullResponse,
@@ -138,12 +250,13 @@ class RemoteOllamaService {
                     complete: true
                   });
                 }
+                console.log('✅ Response completed, length:', fullResponse.length);
                 resolve(fullResponse);
                 return;
               }
               
             } catch (e) {
-              console.warn('⚠️ JSON parse error:', e.message);
+              console.warn('⚠️ JSON parse error:', e.message, 'Line:', line);
             }
           }
         }
@@ -153,7 +266,7 @@ class RemoteOllamaService {
       } catch (error) {
         console.error('❌ Ollama service error:', error);
         
-        const fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة.";
+        const fallbackResponse = "عذرًا، الخدمة الطبية غير متاحة حاليًا. يرجى المحاولة لاحقًا أو الاتصال بطبيبك مباشرة. للطوارئ اتصل على 190.";
         
         if (socket && socket.connected) {
           socket.emit('streaming_response', {
@@ -171,7 +284,7 @@ class RemoteOllamaService {
   async healthCheck() {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10000);
+      const timeout = setTimeout(() => controller.abort(), 15000); // Increased for Render
       
       const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
         signal: controller.signal
@@ -207,144 +320,188 @@ const activeConnections = new Map();
 
 // Store chat history for admin monitoring
 const chatHistory = [];
-const MAX_HISTORY_SIZE = 1000;
+const MAX_HISTORY_SIZE = 500; // Reduced for Render
 
-// Simple Admin Controls
+// Security logging
+const securityLogger = {
+  logAbuseAttempt(socket, type, details) {
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      ip: socket.handshake.address,
+      socketId: socket.id,
+      type,
+      details
+    };
+    
+    console.warn('🚨 Security alert:', logEntry);
+    addToHistory(socket.id, 'security_alert', `${type}: ${JSON.stringify(details)}`);
+  }
+};
+
+// Admin Controls (simplified for Render)
 const adminControls = {
   getConnectedUsers() {
-    return Array.from(activeConnections.entries()).map(([id, info]) => ({
+    const users = Array.from(activeConnections.entries()).map(([id, info]) => ({
       socketId: id,
       ...info,
-      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's'
+      connectionTime: Math.floor((new Date() - info.connectedAt) / 1000) + 's',
+      isBlocked: blockedIPs.has(info.ip) || blockedUsers.has(id)
     }));
+    return users;
   },
 
-  kickUser(socketId) {
-    const socket = io.sockets.sockets.get(socketId);
-    if (socket) {
-      socket.emit('admin_message', {
-        type: 'warning',
-        message: 'تم فصل اتصالك من قبل المسؤول'
+  kickUser(socketId, adminSocket) {
+    const targetSocket = io.sockets.sockets.get(socketId);
+    if (targetSocket) {
+      targetSocket.emit('chat_message', {
+        text: "🚫 تم فصل اتصالك من قبل المسؤول.",
+        isUser: false,
+        timestamp: new Date().toISOString(),
+        type: 'admin_action'
       });
-      socket.disconnect(true);
-      console.log(`🔴 Admin kicked user: ${socketId}`);
+      
+      setTimeout(() => {
+        targetSocket.disconnect(true);
+        activeConnections.delete(socketId);
+      }, 1000);
+      
+      addToHistory(socketId, 'admin_action', `User kicked by admin`);
       return true;
     }
     return false;
   },
 
-  blockUser(socketId) {
-    // Simple blocking - just kick and prevent immediate reconnection
-    // In production, you'd want a proper blocking mechanism
-    return this.kickUser(socketId);
+  blockUser(socketId, adminSocket, reason = "Blocked by admin") {
+    const targetSocket = io.sockets.sockets.get(socketId);
+    let userInfo = null;
+    
+    if (targetSocket) {
+      userInfo = activeConnections.get(socketId);
+    }
+    
+    blockedUsers.set(socketId, {
+      timestamp: new Date().toISOString(),
+      reason: reason
+    });
+    
+    if (targetSocket && userInfo) {
+      blockedIPs.set(userInfo.ip, {
+        timestamp: new Date().toISOString(),
+        reason: reason,
+        socketId: socketId
+      });
+      
+      targetSocket.emit('chat_message', {
+        text: "⛔ تم حظر اتصالك من قبل المسؤول.",
+        isUser: false,
+        timestamp: new Date().toISOString(),
+        type: 'admin_action'
+      });
+      
+      setTimeout(() => {
+        targetSocket.disconnect(true);
+        activeConnections.delete(socketId);
+      }, 1000);
+    }
+    
+    return true;
   },
 
-  broadcastToAll(message) {
-    io.emit('admin_announcement', {
-      message: message,
+  unblockUser(socketIdOrIP, adminSocket) {
+    let unblocked = false;
+    
+    if (blockedUsers.has(socketIdOrIP)) {
+      blockedUsers.delete(socketIdOrIP);
+      unblocked = true;
+    }
+    
+    if (blockedIPs.has(socketIdOrIP)) {
+      blockedIPs.delete(socketIdOrIP);
+      unblocked = true;
+    }
+    
+    return unblocked;
+  },
+
+  getBlockedList() {
+    return {
+      ips: Array.from(blockedIPs.entries()).map(([ip, info]) => ({ ip, ...info })),
+      users: Array.from(blockedUsers.entries()).map(([socketId, info]) => ({ socketId, ...info }))
+    };
+  },
+
+  broadcastToAll(message, adminSocket) {
+    const adminMessage = {
+      text: `📢 إشعار من المسؤول: ${message}`,
+      isUser: false,
       timestamp: new Date().toISOString(),
-      from: 'System Admin'
+      type: 'admin_broadcast'
+    };
+    
+    let recipients = 0;
+    activeConnections.forEach((info, socketId) => {
+      const userSocket = io.sockets.sockets.get(socketId);
+      if (userSocket && userSocket.connected) {
+        userSocket.emit('chat_message', adminMessage);
+        recipients++;
+      }
     });
-    console.log(`📢 Admin broadcast: ${message}`);
-    return activeConnections.size;
+    
+    addToHistory('admin', 'broadcast', `Admin broadcast: ${message}`);
+    return recipients;
   },
 
   getServerStats() {
     return {
       totalConnections: activeConnections.size,
       chatHistorySize: chatHistory.length,
+      blockedIPs: blockedIPs.size,
+      blockedUsers: blockedUsers.size,
       serverUptime: process.uptime(),
-      memoryUsage: process.memoryUsage(),
       timestamp: new Date().toISOString()
     };
+  },
+
+  isUserBlocked(socket) {
+    const ip = socket.handshake.address;
+    return blockedIPs.has(ip) || blockedUsers.has(socket.id);
   }
 };
 
 // Function to add message to history
 function addToHistory(socketId, type, content, timestamp = new Date()) {
   const entry = {
-    id: `${socketId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    id: `${socketId}-${Date.now()}`,
     socketId,
-    type, // 'user_message', 'bot_response', 'user_connected', 'user_disconnected'
+    type,
     content,
-    timestamp: timestamp.toISOString(),
-    timestampReadable: timestamp.toLocaleString('en-US', { 
-      timeZone: 'Africa/Tunis',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
+    timestamp: timestamp.toISOString()
   };
   
   chatHistory.push(entry);
   
-  // Keep history size manageable
   if (chatHistory.length > MAX_HISTORY_SIZE) {
-    chatHistory.splice(0, chatHistory.length - MAX_HISTORY_SIZE);
+    chatHistory.shift(); // Remove oldest entry
   }
   
   return entry;
 }
 
-// ==================== DEBUG ROUTES ====================
+// ==================== ROUTES ====================
 
-// Debug route to check if static files are working
-app.get('/debug-static', (req, res) => {
-  const publicPath = path.join(__dirname, 'public');
-  let files = [];
-  
-  try {
-    if (fs.existsSync(publicPath)) {
-      files = fs.readdirSync(publicPath);
-    }
-  } catch (error) {
-    console.error('Error reading public directory:', error);
-  }
-  
-  res.json({
-    message: 'Static files debug information',
-    publicPath: publicPath,
-    publicExists: fs.existsSync(publicPath),
-    files: files,
-    adminHtmlExists: fs.existsSync(path.join(publicPath, 'admin.html')),
-    currentDir: __dirname
-  });
-});
-
-// Direct admin route
-app.get('/admin-test', (req, res) => {
-  const adminPath = path.join(__dirname, 'public', 'admin.html');
-  console.log('📁 Attempting to serve admin from:', adminPath);
-  
-  if (fs.existsSync(adminPath)) {
-    res.sendFile(adminPath);
-  } else {
-    res.status(404).json({
-      error: 'Admin file not found',
-      path: adminPath,
-      currentFiles: fs.readdirSync(__dirname)
-    });
-  }
-});
-
-// ==================== MAIN ROUTES ====================
-
-// Health check endpoint
+// Health check endpoint (essential for Render)
 app.get('/api/health', async (req, res) => {
   try {
     const ollamaHealth = await medicalService.healthCheck();
     
     const healthStatus = {
       status: 'OK',
-      service: 'Tunisian Medical Chatbot',
+      service: 'Tunisian Medical Chatbot - Render',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-      memory: process.memoryUsage(),
       connections: activeConnections.size,
-      ollama: ollamaHealth
+      ollama: ollamaHealth,
+      environment: process.env.NODE_ENV || 'development'
     };
     
     res.json(healthStatus);
@@ -357,18 +514,48 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// Simple admin stats endpoint (no auth for local use)
-app.get('/api/admin/stats', (req, res) => {
-  const stats = adminControls.getServerStats();
-  res.json(stats);
+// Render-compatible admin endpoints
+app.get('/api/admin/blocked-list', (req, res) => {
+  const blockedList = adminControls.getBlockedList();
+  res.json(blockedList);
+});
+
+app.post('/api/admin/block-user', (req, res) => {
+  const { socketId, reason } = req.body;
+  
+  if (!socketId) {
+    return res.status(400).json({ error: 'Socket ID is required' });
+  }
+  
+  const success = adminControls.blockUser(socketId, null, reason || "Manual block by admin");
+  
+  res.json({
+    success: success,
+    message: success ? `User ${socketId} blocked` : `Failed to block user`
+  });
+});
+
+app.post('/api/admin/unblock', (req, res) => {
+  const { target } = req.body;
+  
+  if (!target) {
+    return res.status(400).json({ error: 'Target is required' });
+  }
+  
+  const success = adminControls.unblockUser(target, null);
+  
+  res.json({
+    success: success,
+    message: success ? `${target} unblocked` : `Target not found`
+  });
 });
 
 // Simple test endpoint
 app.get('/api/test', (req, res) => {
   res.json({
-    message: 'Medical chatbot server is running!',
+    message: '🚀 Medical chatbot server is running on Render!',
     timestamp: new Date().toISOString(),
-    version: '1.0.0'
+    version: '2.0.0-render'
   });
 });
 
@@ -377,30 +564,57 @@ app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
-// Serve admin panel directly
-app.get('/admin.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
-});
-
-// Root route - redirect to admin
+// Root route
 app.get('/', (req, res) => {
-  res.redirect('/admin');
+  res.json({
+    message: '🏥 Tunisian Medical Chatbot Server',
+    status: 'Running on Render',
+    endpoints: {
+      health: '/api/health',
+      admin: '/admin',
+      test: '/api/test'
+    }
+  });
 });
 
-// Socket.io connection handling
+// ==================== SOCKET.IO FOR RENDER ====================
+
 io.on('connection', (socket) => {
   console.log('🔌 User connected:', socket.id);
+  
+  // Security: Rate limiting check
+  if (!checkSocketRateLimit(socket)) {
+    socket.emit('error', { 
+      message: 'Rate limit exceeded. Please try again later.' 
+    });
+    socket.disconnect();
+    return;
+  }
+  
+  // Check if user is blocked
+  if (adminControls.isUserBlocked(socket)) {
+    socket.emit('chat_message', {
+      text: "⛔ تم حظر اتصالك من قبل المسؤول.",
+      isUser: false,
+      timestamp: new Date().toISOString(),
+      type: 'blocked'
+    });
+    
+    setTimeout(() => {
+      socket.disconnect(true);
+    }, 2000);
+    return;
+  }
   
   const userInfo = {
     connectedAt: new Date(),
     ip: socket.handshake.address,
-    userAgent: socket.handshake.headers['user-agent']
+    userAgent: socket.handshake.headers['user-agent'],
+    isAdmin: false
   };
   
   activeConnections.set(socket.id, userInfo);
-  
-  // Add to chat history
-  addToHistory(socket.id, 'user_connected', `User connected from ${userInfo.ip}`);
+  addToHistory(socket.id, 'user_connected', `User connected`);
 
   // Send welcome message
   socket.emit('welcome', {
@@ -411,6 +625,14 @@ io.on('connection', (socket) => {
 
   // Handle incoming messages
   socket.on('send_message', async (data) => {
+    // Security: Check message rate limit
+    if (!checkSocketRateLimit(socket)) {
+      socket.emit('error', { 
+        message: 'Message rate limit exceeded. Please slow down.' 
+      });
+      return;
+    }
+    
     if (!data.message || data.message.trim().length === 0) {
       socket.emit('error', { message: 'الرجاء كتابة رسالة.' });
       return;
@@ -424,7 +646,6 @@ io.on('connection', (socket) => {
     try {
       console.log(`📝 Processing message from ${socket.id}`);
       
-      // Add user message to history
       addToHistory(socket.id, 'user_message', data.message.trim());
       
       await medicalService.generateResponse(data.message.trim(), socket);
@@ -439,55 +660,39 @@ io.on('connection', (socket) => {
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log('🔌 User disconnected:', socket.id, 'Reason:', reason);
-    
-    // Add to chat history
-    addToHistory(socket.id, 'user_disconnected', `User disconnected: ${reason}`);
-    
     activeConnections.delete(socket.id);
   });
 
-  // Handle errors
-  socket.on('error', (error) => {
-    console.error('💥 Socket error:', error);
-  });
-
-  // ==================== SIMPLE REAL-TIME ADMIN ====================
-  
-  // ADMIN SECRET CONNECTION - Simple and effective for local server
-  if (socket.handshake.auth.secret === ADMIN_SECRET) {
-    console.log('🔓 Admin connected via WebSocket:', socket.id);
+  // Admin system
+  if (socket.handshake.auth && socket.handshake.auth.secret === ADMIN_SECRET) {
+    console.log('🔓 Admin connected:', socket.id);
     
+    userInfo.isAdmin = true;
+    activeConnections.set(socket.id, userInfo);
+
     socket.emit('admin_welcome', { 
       message: '🔓 أنت متصل كمسؤول',
       users: adminControls.getConnectedUsers(),
-      stats: adminControls.getServerStats()
+      stats: adminControls.getServerStats(),
+      socketId: socket.id
     });
 
-    // Send real-time updates to admin
+    // Admin event handlers
     socket.on('admin_kick_user', (data) => {
-      const success = adminControls.kickUser(data.socketId);
+      const success = adminControls.kickUser(data.socketId, socket);
       socket.emit('admin_action_result', {
         action: 'kick_user',
         success: success,
-        message: success ? `تم فصل المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
+        message: success ? `تم فصل المستخدم` : `لم يتم العثور على المستخدم`
       });
     });
 
     socket.on('admin_block_user', (data) => {
-      const success = adminControls.blockUser(data.socketId);
+      const success = adminControls.blockUser(data.socketId, socket, data.reason);
       socket.emit('admin_action_result', {
         action: 'block_user',
         success: success,
-        message: success ? `تم حظر المستخدم ${data.socketId}` : `لم يتم العثور على المستخدم ${data.socketId}`
-      });
-    });
-
-    socket.on('admin_broadcast', (data) => {
-      const recipients = adminControls.broadcastToAll(data.message);
-      socket.emit('admin_action_result', {
-        action: 'broadcast',
-        success: true,
-        message: `تم إرسال الإشعار إلى ${recipients} مستخدم`
+        message: success ? `تم حظر المستخدم` : `فشل في الحظر`
       });
     });
 
@@ -495,19 +700,16 @@ io.on('connection', (socket) => {
       socket.emit('admin_stats', adminControls.getServerStats());
     });
 
-    socket.on('admin_get_history', () => {
-      socket.emit('admin_chat_history', chatHistory.slice(-50));
-    });
-
-    // Send user updates to admin in real-time every 3 seconds
+    // Send periodic updates to admin
     const adminUpdateInterval = setInterval(() => {
-      socket.emit('admin_users_update', {
-        users: adminControls.getConnectedUsers(),
-        stats: adminControls.getServerStats()
-      });
-    }, 3000);
+      if (socket.connected) {
+        socket.emit('admin_users_update', {
+          users: adminControls.getConnectedUsers(),
+          stats: adminControls.getServerStats()
+        });
+      }
+    }, 5000);
 
-    // Clear interval when admin disconnects
     socket.on('disconnect', () => {
       clearInterval(adminUpdateInterval);
       console.log('🔒 Admin disconnected:', socket.id);
@@ -515,21 +717,11 @@ io.on('connection', (socket) => {
   }
 });
 
-// 404 handler - MUST BE LAST
+// 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
-    message: 'عذرًا، المسار غير موجود.',
-    requestedUrl: req.originalUrl,
-    availableRoutes: [
-      '/api/health',
-      '/api/admin/stats', 
-      '/api/test',
-      '/admin',
-      '/admin.html',
-      '/admin-test',
-      '/debug-static'
-    ]
+    message: 'عذرًا، المسار غير موجود.'
   });
 });
 
@@ -542,44 +734,44 @@ app.use((error, req, res, next) => {
   });
 });
 
+// Render-specific port configuration
 const PORT = process.env.PORT || 10000;
-
-// Check if public folder and admin.html exist on startup
-const publicPath = path.join(__dirname, 'public');
-const adminHtmlPath = path.join(publicPath, 'admin.html');
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`
-🏥 Tunisian Medical Chatbot Server
+🚀 Tunisian Medical Chatbot - RENDER EDITION
 📍 Port: ${PORT}
-🎯 Environment: ${process.env.NODE_ENV || 'development'}
+🌐 Environment: ${process.env.NODE_ENV || 'development'}
 🔗 Ollama: ${OLLAMA_BASE_URL}
 🤖 Model: ${OLLAMA_MODEL}
-🔒 Admin Secret: ${ADMIN_SECRET}
 
-📁 Static Files Status:
-   Public folder: ${fs.existsSync(publicPath) ? '✅ EXISTS' : '❌ MISSING'}
-   admin.html: ${fs.existsSync(adminHtmlPath) ? '✅ EXISTS' : '❌ MISSING'}
+✅ Server is running on Render!
+✅ Health check: /api/health
+✅ Admin panel: /admin
+✅ Socket.IO: Enabled
 
-🌐 Available Admin URLs:
-   http://localhost:${PORT}/admin
-   http://localhost:${PORT}/admin.html  
-   http://localhost:${PORT}/admin-test
-
-🔧 Debug URLs:
-   http://localhost:${PORT}/debug-static
-   http://localhost:${PORT}/api/health
-
-✨ Server is running and ready!
+✨ Ready for medical consultations!
   `);
 });
+
+// Clean up rate limit records
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, limit] of socketRateLimits.entries()) {
+    if (now - limit.lastReset > SOCKET_RATE_LIMIT.windowMs * 2) {
+      socketRateLimits.delete(ip);
+    }
+  }
+}, SOCKET_RATE_LIMIT.windowMs * 2);
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('🔻 SIGTERM received, shutting down gracefully...');
   server.close(() => {
     console.log('🔻 Process terminated');
+    process.exit(0);
   });
 });
 
 module.exports = app;
+
