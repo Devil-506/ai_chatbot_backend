@@ -13,6 +13,7 @@ const io = socketIo(server, {
   cors: {
     origin: [
       "https://ai-chatbot-frontend-1vx1.onrender.com",
+      "https://ai-chatbot-frontend-bay.vercel.app/"
       "http://localhost:3000",
       "http://localhost:5173"
     ],
@@ -926,3 +927,4 @@ process.on('SIGTERM', () => {
 });
 
 module.exports = app;
+
